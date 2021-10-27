@@ -1,0 +1,26 @@
+[package]
+name = "mtp_audioplayer"
+version = "0.1.0"
+authors = ["ksb <ksb@users.sourceforge.net>"]
+edition = "2018"
+
+[[bin]]
+name = "mtp_audioplayer"
+path = "src/mtp_audioplayer.rs"
+
+[[bin]]
+name = "clip_player"
+path = "src/clip_player_main.rs"
+
+[dependencies]
+hound = "3.1.0"
+serde_json = "1.0"
+serde= {version="*", features=["derive"]}
+tracing="0.1"
+tracing-subscriber="0.2"
+tokio= {version="1.6", features=["rt-multi-thread", "net", "macros", "signal", "io-util", "sync", "time"]}
+log = "0.4"
+futures="*"
+alsa="0.5"
+xml-rs="0.8"
+
