@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<audioplayer xmlns="http://www.elektro-kapsel.se/audioplayer/v1">
+  <bind>/tmp/siemens/automation/HmiRunTime</bind>
+  <playback_device rate="44100" channels="2">plughw:SoundBar</playback_device>
+  <clips> 
+    <file id="SoundAlarm">Alarm.wav</file>
+    <file id="SoundInfo">Info.wav</file>
+    <file id="SoundAccept">Knapp4.wav</file>
+    <file id="SoundExe">Knapp2.wav</file>
+    <file id="SoundInc">Knapp3.wav</file>
+    <file id="SoundDec">Knapp4.wav</file>
+  </clips>
+  <tags>
+    <toggle tag="SoundAlarm">
+      <play>SoundAlarm</play>
+    </toggle>
+    <toggle tag="SoundInc">
+      <play>SoundInfo</play>
+    </toggle>
+    <toggle tag="SoundExe">
+      <play>SoundExe</play>
+    </toggle>
+    <toggle tag="SoundDec">
+      <play>SoundInc</play>
+    </toggle>
+    <toggle tag="SoundDec">
+      <play>SoundInc</play>
+    </toggle>
+    <toggle tag="AlarmRestart">
+      <alarm_restart/>
+    </toggle>
+    <equals tag="AlarmProfile" value="0">
+      <set_profile>Normal</set_profile>
+    </equals>
+    <equals tag="AlarmProfile" value="1">
+      <set_profile>Operation</set_profile>
+    </equals>
+  </tags>
+  <alarms>
+    <filter id="AlarmsUnacked">
+      <class>Larm</class>
+      <unacked/>
+    </filter>
+    <filter id="AlarmsRaised">
+      <class>Larm</class>
+      <raised/>
+    </filter>
+    <filter id="Warnings">
+      <class>Varning</class>
+      <raised/>
+    </filter>
+    <sequence id="AlarmRepeat">
+      <repeat>
+	<repeat count="20">
+	  <play>SoundAlarm</play>
+	  <wait>5s</wait>
+	</repeat>
+	<wait>6h</wait>
+      </repeat>
+    </sequence>
+    <sequence id="AlarmDelayed">
+      <repeat>
+	<wait>5m</wait>
+	<repeat count="20">
+	  <play>SoundAlarm</play>
+	  <wait>5s</wait>
+	</repeat>
+      </repeat>
+    </sequence>
+
+    <sequence id="AlarmOnce">
+      <play>SoundAlarm</play>
+    </sequence>
+    <sequence id="InfoOnce">
+      <play>SoundInfo</play>
+    </sequence>
+    <profile id="Normal">
+      <while filter="AlarmUnacked" state="not_empty">
+	<action use="AlarmRepeat"/>
+      </while>
+      <while filter="AlarmsRaised" state="not_empty">
+	<action use="AlarmDelayed"/>
+      </while>
+	
+      <when filter="Varning" event="add">
+	<action use="InfoOnce"/>
+      </when>
+    </profile>
+  </alarms>
+</audioplayer>
