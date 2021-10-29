@@ -11,7 +11,7 @@ use serde_json;
 use std::process;
 use log::{debug,error};
 
-type Result<T> = 
+pub type Result<T> = 
     std::result::Result<T, Box<dyn std::error::Error + Send + Sync + 'static>>;
 
 pub struct Connection
@@ -243,7 +243,7 @@ async fn send_cmd(stream: &mut OwnedWriteHalf, cmd: &Message) ->Result<()>
     debug!("Cmd: {}",String::from_utf8(cmd_bytes.clone()).unwrap());
     stream.write_all(&cmd_bytes).await?;
     stream.flush().await?;
-    return Ok(())
+    Ok(())
 }
 
 impl Connection {
@@ -301,7 +301,7 @@ impl Connection {
         let cmd = Message {
             message: MessageVariant::WriteTag(ParamWrapperCap{
                 params: WriteTagParams {
-                    tags: tags.iter().map(|t| t.clone()).collect(),
+                    tags: tags.to_vec(),
                 }}),
             client_cookie: self.get_cookie()
         };

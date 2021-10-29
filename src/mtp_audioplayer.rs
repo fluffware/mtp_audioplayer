@@ -1,5 +1,4 @@
 use serde::Deserialize;
-use serde_json;
 use std::env;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
@@ -10,16 +9,14 @@ use log::{error,debug,warn};
 use std::sync::Arc;
 use std::collections::BTreeMap;
 
-mod open_pipe;
-use open_pipe::MessageVariant;
-use open_pipe::WriteTagValue;
 
-mod clip_player;
-use clip_player::ClipPlayer;
+use mtp_audioplayer::open_pipe::{
+    self,
+    MessageVariant,
+    WriteTagValue
+};
 
-mod alarms;
-mod read_config;
-mod xml_stack;
+use mtp_audioplayer::clip_player::ClipPlayer;
 
 
 fn default_volume() -> f64
@@ -72,7 +69,7 @@ fn read_config(path: &Path)
     let conf : Config = serde_json::from_reader(f)?;
     Ok(conf)
 }
-const DEFAULT_CONFIG_FILE: &'static str = "mtp_audioplayer.conf";
+const DEFAULT_CONFIG_FILE: &str = "mtp_audioplayer.conf";
 
 
 async fn subscribe_tags(pipe: &mut open_pipe::Connection,
@@ -99,16 +96,16 @@ async fn subscribe_tags(pipe: &mut open_pipe::Connection,
                             tag_names.clear();
                             for tag in params.params.tags {
                                 if tag.error.error_code == 0 {
-                                tag_names.push(tag.name);
-                            } else {
+                                    tag_names.push(tag.name);
+                                } else {
                                     warn!("Failed to subscribe to {}", tag.name);
                                     resubscribe = true;
                                 }
-                        }
+                            }
                         }
                         if resubscribe {
                             pipe.unsubscribe_tags(&subscription).await?;
-                            break 'next_event;
+                            continue 'next_event;
                         } else {
                             break 'try_subscribe;
                         }
@@ -222,7 +219,7 @@ async fn handle_msg(pipe: &mut open_pipe::Connection,
                     });
                     if let Some(clip) = clips.get(&notify_tag.name) {
                         debug!("Playing {}", notify_tag.name);
-                        player.start_clip(clip.samples.clone())?;
+                        player.start_clip(clip.samples.clone()).await?;
                     }
                 }
             }

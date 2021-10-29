@@ -6,12 +6,12 @@ use xml::reader::Error as XmlError;
 #[derive(Debug)]
 pub enum Error
 {
-    ReaderError(Box<XmlError>),
+    Reader(Box<XmlError>),
     UnmatchedEndElement,
     NoEndElement,
     EndOfDocument,
-    UnhandledNodes,
-    StateError,
+    //UnhandledNodes,
+    InvalidState,
 }
 
 impl std::error::Error for Error {}
@@ -20,7 +20,7 @@ impl From<XmlError> for Error
 {
     fn from(err: XmlError) -> Error
     {
-        Error::ReaderError(Box::new(err))
+        Error::Reader(Box::new(err))
     }
 }
 
@@ -29,16 +29,18 @@ impl std::fmt::Display for Error {
            -> std::result::Result<(), std::fmt::Error>
     {
         match self {
-            Error::ReaderError(e) => e.fmt(f),
+            Error::Reader(e) => e.fmt(f),
             Error::UnmatchedEndElement =>
                 write!(f,"End element doesn't match start element"),
             Error::NoEndElement =>
                 write!(f,"End of element not found"),
             Error::EndOfDocument =>
                 write!(f,"Unexpected end of document"),
+            /*
             Error::UnhandledNodes =>
-                write!(f,"Not all child node where handled"),
-            Error::StateError =>
+                write!(f,"Not all child nodes where handled"),
+             */
+            Error::InvalidState =>
                 write!(f,"The iterator is in an invalid state"),
         }            
     }
@@ -58,21 +60,15 @@ where I: Iterator<Item = XmlResult<XmlEvent>>
 impl<I> ParsePosition<I> 
 where I: Iterator<Item = XmlResult<XmlEvent>>
 {
-    fn next<'a>(&'a mut self) -> Result<&'a XmlEvent>
+    fn next(&mut self) -> Result<&XmlEvent>
     {
-        match self.current_event {
-            XmlEvent::StartElement{..} => {
-                self.level += 1;
-            },
-            _ => {}
+        if let XmlEvent::StartElement{..} = self.current_event {
+            self.level += 1;
         }
         match self.iter.next() {
             Some(Ok(event)) => {
-                match event {
-                    XmlEvent::EndElement{..} => {
-                        self.level -= 1;
-                    },
-                    _ => {}
+                if let XmlEvent::EndElement{..} = event {
+                    self.level -= 1;
                 }
                 self.current_event = event;
                 //println!("Next: {:?} @ {}", self.current_event, self.level);
@@ -124,50 +120,13 @@ where I: Iterator<Item = XmlResult<XmlEvent>>
         })
     }
 
-    pub fn child_iter<'b>(&'b mut self) -> Result<XmlSiblingIter<'b, I>>
+    pub fn child_iter(&mut self) -> Result<XmlSiblingIter<I>>
     {
         Ok(XmlSiblingIter{pos: &mut self.pos,
                           parent_name: None,
                           level: 1})
     }
     
-}
-
-// The iterator must point at the start element, i.e. pos.next() gets
-// the first child node
-
-fn skip_children<'a, I>(pos: &'a mut ParsePosition<I>) -> Result<()>
-where I: Iterator<Item = XmlResult<XmlEvent>>
-{
-    let start_name;
-    if let XmlEvent::StartElement{name, ..} = &pos.current_event {
-        start_name = name.clone();
-    } else {
-        return Err(Error::StateError);
-    }
-    let end_level = pos.level;
-    loop {
-        match pos.next() {
-            Ok(XmlEvent::EndElement{name}) =>
-            {
-                if name == &start_name {
-                    if end_level >= pos.level {
-                        return Ok(())
-                    }
-                } else {
-                    return Err(Error::UnmatchedEndElement)
-                }
-            },
-            Ok(_) =>
-            {
-                if end_level >= pos.level {
-                    return Err(Error::NoEndElement)
-                }
-                
-            },
-            Err(e) => return Err(e.into())
-        }
-    }
 }
 
 
@@ -179,14 +138,14 @@ where I: Iterator<Item = XmlResult<XmlEvent>>
     {
         match self.pos.next() {
             Ok(_) => {}
-            Err(e) => return Some(Err(e.into()))
+            Err(e) => return Some(Err(e))
         }
 
         if self.level < self.pos.level {
             loop {
                 match self.pos.next() {
                     Ok(_) => {}
-                    Err(e) => return Some(Err(e.into()))
+                    Err(e) => return Some(Err(e))
                 }
                 if self.level == self.pos.level {
                     break
@@ -199,10 +158,10 @@ where I: Iterator<Item = XmlResult<XmlEvent>>
                             return Some(Err(Error::UnmatchedEndElement))
                         }
                     },
-                    _ => return Some(Err(Error::StateError))
+                    _ => return Some(Err(Error::InvalidState))
                 }
             } else {
-                return Some(Err(Error::StateError))
+                return Some(Err(Error::InvalidState))
             }
             self.parent_name = None;
         }
@@ -213,7 +172,7 @@ where I: Iterator<Item = XmlResult<XmlEvent>>
             } else {
                 match self.pos.next() {
                     Ok(_) => {}
-                        Err(e) => return Some(Err(e.into()))
+                        Err(e) => return Some(Err(e))
                 }
                 if self.level > self.pos.level {
                     return None
@@ -233,12 +192,12 @@ where I: Iterator<Item = XmlResult<XmlEvent>>
         &self.pos.current_event
     }
     
-    pub fn child_iter<'b>(&'b mut self) -> Result<XmlSiblingIter<'b, I>>
+    pub fn child_iter(&mut self) -> Result<XmlSiblingIter<I>>
     {
         if let XmlEvent::StartElement{name, ..} = &self.pos.current_event {
             self.parent_name = Some(name.clone());
         } else {
-            return Err(Error::StateError)
+            return Err(Error::InvalidState)
         }
         self.level = self.pos.level;
         Ok(XmlSiblingIter{pos: &mut self.pos,
@@ -254,7 +213,7 @@ where I: Iterator<Item = XmlResult<XmlEvent>>
         if let XmlEvent::StartElement{name, ..} = &self.pos.current_event {
             start_name = name.clone();
         } else {
-            return Err(Error::StateError);
+            return Err(Error::InvalidState);
         }
         let end_level = self.pos.level;
         loop {
@@ -276,7 +235,7 @@ where I: Iterator<Item = XmlResult<XmlEvent>>
                 
                 // End on first node at the start level that is not an end node
                 XmlEvent::Characters(str) => {
-                    text += &str;
+                    text += str;
                 },
                 _ =>
                 {
