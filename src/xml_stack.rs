@@ -200,7 +200,7 @@ where I: Iterator<Item = XmlResult<XmlEvent>>
             return Err(Error::InvalidState)
         }
         self.level = self.pos.level;
-        Ok(XmlSiblingIter{pos: &mut self.pos,
+        Ok(XmlSiblingIter{pos: self.pos,
                           parent_name: None,
                           level: self.level + 1})
     }

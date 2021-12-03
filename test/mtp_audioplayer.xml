@@ -1,15 +1,77 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <audioplayer xmlns="http://www.elektro-kapsel.se/audioplayer/v1">
   <bind>/tmp/siemens/automation/HmiRunTime</bind>
-  <playback_device rate="44100" channels="2">plughw:SoundBar</playback_device>
-  <clips> 
-    <file id="SoundAlarm">Alarm.wav</file>
-    <file id="SoundInfo">Info.wav</file>
-    <file id="SoundAccept">Knapp4.wav</file>
-    <file id="SoundExe">Knapp2.wav</file>
-    <file id="SoundInc">Knapp3.wav</file>
-    <file id="SoundDec">Knapp4.wav</file>
+  <playback_device rate="44100" channels="2">default</playback_device>
+  <clips path="DTMF"> 
+    <file id="SoundAlarm">0.wav</file>
+    <file id="SoundInfo">1.wav</file>
+    <file id="SoundAccept">2.wav</file>
+    <file id="SoundExe">3.wav</file>
+    <file id="SoundInc">4.wav</file>
+    <file id="SoundDec">5.wav</file>
+    <sine id="A" amplitude="0.5" frequency="440" duration="0.1s"/>
+    <sine id="A#" amplitude="0.5" frequency="466.16" duration="0.1s"/>
+    <sine id="B" amplitude="0.5" frequency="493.88" duration="0.1s"/>
+    <sine id="C" amplitude="0.5" frequency="523.25" duration="0.1s"/>
+    <sine id="C#" amplitude="0.5" frequency="554.37" duration="0.1s"/>
+    <sine id="D" amplitude="0.5" frequency="587.33" duration="0.1s"/>
+    <sine id="D#" amplitude="0.5" frequency="622.25" duration="0.1s"/>
+    <sine id="E" amplitude="0.5" frequency="659.26" duration="0.1s"/>
+    <sine id="F" amplitude="0.5" frequency="698.46" duration="0.1s"/>
+    <sine id="F#" amplitude="0.5" frequency="739.99" duration="0.1s"/>
+    <sine id="G" amplitude="0.5" frequency="783.99" duration="0.1s"/>
+    <sine id="G#" amplitude="0.5" frequency="830.61" duration="0.1s"/>
+
   </clips>
+  <actions>
+    <play id="Dec">SoundDec</play>
+    <play id="Inc">SoundInc</play>
+    <play id="Alarm">SoundAlarm</play>
+    <play id="Info">SoundInfo</play>
+    <sequence id="Seq">
+      <play id="Dec">SoundDec</play>
+      <wait>0.3s</wait>
+      <play id="Inc">SoundInc</play>
+    </sequence>
+    <sequence id="Blipp">
+      <repeat>
+	<play>A</play>
+	<wait>0.1s</wait>
+	<play>B</play>
+	<wait>1s</wait>
+      </repeat>
+    </sequence>
+      <sequence id="Blipp3">
+      <repeat count ="3">
+	<play>A</play>
+	<wait>0.1s</wait>
+	<play>B</play>
+	<wait>1s</wait>
+      </repeat>
+    </sequence>
+    <sequence id="RefBlipp">
+      <action use="Blipp3"/>
+    </sequence>
+    <parallel id="ParWait">
+      <play timeout="2.1s">SoundAlarm</play>
+      <play timeout="2.1s">SoundInc</play>
+    </parallel>
+    <parallel id="ParNoWait">
+      <play timeout="0s">B</play>
+      <play timeout="0s">A</play>
+    </parallel>
+    <parallel id="ParPriority">
+      <sequence>
+	<wait>1s</wait>
+	<play priority="1">SoundInfo</play>
+      </sequence>
+      <sequence>
+	<play priority="2">SoundAlarm</play>
+	<wait>1s</wait>
+	<play priority="2">SoundAlarm</play>
+      </sequence>
+    </parallel>
+  </actions>
   <tags>
     <toggle tag="SoundAlarm">
       <play>SoundAlarm</play>
@@ -24,7 +86,7 @@
       <play>SoundInc</play>
     </toggle>
     <toggle tag="SoundDec">
-      <play>SoundInc</play>
+      <play>SoundDec</play>
     </toggle>
     <toggle tag="AlarmRestart">
       <alarm_restart/>

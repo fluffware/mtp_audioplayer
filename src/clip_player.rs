@@ -321,7 +321,7 @@ impl ClipPlayer
                -> Result<ClipPlayer, Error>
     {
         let pcm_name = CString::new(pcm_name).unwrap();
-        let pcm = PCM::open(pcm_name.as_c_str(), Direction::Playback,true)?;
+        let pcm = PCM::open(pcm_name.as_c_str(), Direction::Playback,false)?;
         {
             let hw_params = HwParams::any(&pcm)?;
             hw_params.set_rate(rate, ValueOr::Nearest)?;
