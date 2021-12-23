@@ -1,7 +1,7 @@
 use tokio::time::Duration;
 use crate::clip_queue::ClipQueue;
 use std::sync::Arc;
-use crate::actions::action::{Action, AsyncAction};
+use crate::actions::action::{Action, ActionFuture};
 
 pub struct PlayAction
 {
@@ -26,7 +26,7 @@ impl PlayAction
 
 impl Action for PlayAction
 {
-    fn run(&self) -> AsyncAction
+    fn run(&self) -> ActionFuture
     {
 	let clip_queue = self.clip_queue.clone();
 	let samples = self.samples.clone();

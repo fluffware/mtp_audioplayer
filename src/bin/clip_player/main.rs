@@ -1,4 +1,4 @@
-use log::{error,debug,info};
+use log::{error,debug};
 use std::sync::Arc;
 use clap::{Arg, App, SubCommand};
 use mtp_audioplayer::{
@@ -6,11 +6,9 @@ use mtp_audioplayer::{
     read_config,
     read_config::PlayerConfig,
     app_config,
-    read_config::TagTriggerType
 };
 use std::fs::File;
 use std::path::Path;
-
 
 /*
 fn default_volume() -> f64
@@ -220,6 +218,7 @@ async fn run_action(app_conf: &PlayerConfig, action_name: &str, base_dir: &Path)
     let action = action_ctxt.actions.get(action_name).ok_or_else(
 	|| format!("No action named '{}' found", action_name))?;
     debug!("Running");
+    
     action.run().await?;
     Ok(())
 }
@@ -229,15 +228,10 @@ async fn toggle_tag(app_conf: &PlayerConfig, tag_name: &str, base_dir: &Path)
 {
     let playback_ctxt = app_config::setup_clip_playback(app_conf, base_dir)?;
     let action_ctxt = app_config::setup_actions(app_conf, &playback_ctxt)?;
-    let tag_ctxt = app_config::setup_tags(app_conf,
+    let mut tag_ctxt = app_config::setup_tags(app_conf,
 					  &playback_ctxt,
 					  &action_ctxt)?;
-    if let Some(triggers) =  tag_ctxt.triggers.get(tag_name) {
-	for trigger in triggers {
-	    if matches!(&trigger.trigger, &TagTriggerType::Toggle) {
-		trigger.action.run().await?;
-	    }
-	}
-    }
+    tag_ctxt.tag_changed(tag_name, "false");
+    tag_ctxt.tag_changed(tag_name, "true");
     Ok(())
 }

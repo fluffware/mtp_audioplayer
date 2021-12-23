@@ -350,7 +350,7 @@ impl ClipPlayer
 
     
     pub fn start_clip(&self, clip: Arc<Vec<i16>>)
-                            -> Pin<Box<dyn Future<Output = Result<(), Error>>>>
+                            -> Pin<Box<dyn Future<Output = Result<(), Error>> + Send>>
     {
         let seqno = NEXT_SEQ_NO.fetch_add(1, Ordering::Relaxed);
         {

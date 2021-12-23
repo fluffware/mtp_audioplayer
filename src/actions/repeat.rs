@@ -1,16 +1,16 @@
 use std::sync::Arc;
 use std::num::NonZeroU32;
-use crate::actions::action::{Action, AsyncAction};
+use crate::actions::action::{Action, ActionFuture};
 
 pub struct RepeatAction
 {
-    action: Arc<dyn Action>,
+    action: Arc<dyn Action + Send + Sync>,
     count: Option<NonZeroU32>
 }
 
 impl RepeatAction
 {
-    pub fn new(action: Arc<dyn Action>, count: Option<NonZeroU32>)
+    pub fn new(action: Arc<dyn Action + Send + Sync>, count: Option<NonZeroU32>)
 	       -> RepeatAction
     {
 	RepeatAction{action, count}
@@ -20,7 +20,7 @@ impl RepeatAction
 
 impl Action for RepeatAction
 {
-    fn run(&self) -> AsyncAction
+    fn run(&self) -> ActionFuture
     {
 	let action = self.action.clone();
 	let count = self.count;

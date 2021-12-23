@@ -83,12 +83,9 @@
       <play>SoundExe</play>
     </toggle>
     <toggle tag="SoundDec">
-      <play>SoundInc</play>
-    </toggle>
-    <toggle tag="SoundDec">
       <play>SoundDec</play>
     </toggle>
-    <toggle tag="AlarmRestart">
+    <!--<toggle tag="AlarmRestart">
       <alarm_restart/>
     </toggle>
     <equals tag="AlarmProfile" value="0">
@@ -96,7 +93,7 @@
     </equals>
     <equals tag="AlarmProfile" value="1">
       <set_profile>Operation</set_profile>
-    </equals>
+    </equals>-->
   </tags>
   <alarms>
     <filter id="AlarmsUnacked">

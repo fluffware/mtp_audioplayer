@@ -1,11 +1,11 @@
 use std::sync::Arc;
 use futures::future::join_all;
 
-use crate::actions::action::{Action, AsyncAction};
+use crate::actions::action::{Action, ActionFuture};
 
 pub struct ParallelAction
 {
-    actions: Vec<Arc<dyn Action>>
+    actions: Vec<Arc<dyn Action + Send + Sync>>
 }
 
 impl ParallelAction
@@ -15,11 +15,11 @@ impl ParallelAction
 	ParallelAction{actions: Vec::new()}
     }
 
-    pub fn add_arc_action(&mut self, action: Arc<dyn Action>) {
+    pub fn add_arc_action(&mut self, action: Arc<dyn Action + Send + Sync>) {
 	self.actions.push(action);
     }
     pub fn add_owned_action<T>(&mut self, action: T)
-	where T: Action + 'static
+	where T: Action + Send + Sync + 'static
     {
 	self.actions.push(Arc::new(action));
     }
@@ -27,7 +27,7 @@ impl ParallelAction
 
 impl Action for ParallelAction
 {
-    fn run(&self) -> AsyncAction
+    fn run(&self) -> ActionFuture
     {
 	let actions = self.actions.clone(); // Make a snapshot of the actions
 

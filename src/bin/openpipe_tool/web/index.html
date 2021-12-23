@@ -1,0 +1,20 @@
+<!DOCTYPE HTML PUBLIC "-//IETF//DTD HTML//EN">
+<html>
+  <head>
+    <meta charset="UTF-8">
+    <title>Tags</title>
+    <script>
+      var tags = [];
+    </script>
+    <script src="tags.js"></script>
+  </head>
+  
+  <body onload="let list=new TagList(document.getElementById('tag_list')); list.build_list(tags); list.update_list(tags)">
+    
+  <table id="tag_list">
+    <tr id="Tag">
+      <td><span class"tag_name">Name</span>
+      <td><input class"tag_value" value="0" type="number">
+    </tr>
+  </body>
+</html>

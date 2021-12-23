@@ -1,10 +1,9 @@
-use std::future::Future;
 use std::error::Error;
-use std:: pin::Pin;
+use std::future::Future;
+use std::pin::Pin;
 
-type DynResult<T> = Result<T, Box<dyn Error + Send +Sync>>;
-pub type AsyncAction = Pin<Box<dyn Future<Output = DynResult<()>>>>;
-pub trait Action
-{
-    fn run(&self) -> AsyncAction;
+type DynResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
+pub type ActionFuture = Pin<Box<dyn Future<Output = DynResult<()>> + Send>>;
+pub trait Action {
+    fn run(&self) -> ActionFuture;
 }

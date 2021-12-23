@@ -1,9 +1,11 @@
-use tokio::net::{UnixStream, unix::OwnedWriteHalf};
+use tokio::net::{UnixStream, unix::OwnedWriteHalf, UnixListener};
 use tokio::io::AsyncWriteExt;
 use tokio::io::{AsyncRead};
 use tokio::io::AsyncBufReadExt;
 use tokio::io::BufReader;
 use tokio::sync::mpsc::{self, Receiver, Sender};
+
+use std::future::Future;
 
 use std::path::Path;
 use serde::{Serialize,Deserialize};
@@ -23,7 +25,7 @@ pub struct Connection
 }
 
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all="PascalCase")]
 pub struct ErrorInfo
 {
@@ -41,11 +43,21 @@ impl std::fmt::Display for ErrorInfo
     }
 }
 
+impl Default for ErrorInfo
+{
+    fn default() -> ErrorInfo
+    {
+	ErrorInfo{error_code: 0,
+		  error_description: String::new()
+	}
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(rename_all="PascalCase")]
 pub struct SubscribeTagParams
 {
-    tags: Vec<String>
+    pub tags: Vec<String>
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -55,15 +67,25 @@ pub struct ReadTagParams
     pub tags: Vec<String>
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all="PascalCase")]
+pub struct TagData
+{
+    pub name: String,
+    pub value: String,
+    pub quality: String,
+    pub quality_code: i32,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all="PascalCase")]
 pub struct NotifyTag
 {
-    pub name: String,
-    pub quality: String,
-    pub quality_code: i32,
+    #[serde(flatten)]
+    pub data: TagData,
+    
     pub time_stamp: String,
-    pub value: String,
+   
     #[serde(flatten)]
     pub error: ErrorInfo
 }
@@ -93,7 +115,7 @@ pub struct NotifyTags
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(rename_all="PascalCase")]
-pub struct NotifyWriteTags
+pub struct NotifyWriteTag
 {
     pub name: String,
     #[serde(flatten)]
@@ -102,16 +124,17 @@ pub struct NotifyWriteTags
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(rename_all="PascalCase")]
-pub struct NotifyWriteTagParams
+pub struct NotifyWriteTags
 {
-    pub tags: Vec<NotifyWriteTags>
+    pub tags: Vec<NotifyWriteTag>
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(rename_all="PascalCase")]
 pub struct SubscribeAlarmParams
 {
-    pub system_names: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub system_names: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub filter: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -119,7 +142,7 @@ pub struct SubscribeAlarmParams
 }
 
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all="PascalCase")]
 pub struct NotifyAlarm
 {
@@ -143,6 +166,14 @@ pub struct NotifyAlarm
 #[serde(rename_all="PascalCase")]
 pub struct ParamWrapperCap<T> {
     pub params: T
+}
+
+impl<T> From<T> for ParamWrapperCap<T>
+{
+    fn from(v: T) -> Self
+    {
+	ParamWrapperCap{params: v}
+    }
 }
 
 // Serialize as 'param: {...}
@@ -179,7 +210,7 @@ pub enum MessageVariant
     NotifyReadTag(ParamWrapperCap<NotifyTags>),
     ErrorReadTag(ErrorInfo),
     WriteTag(ParamWrapperCap<WriteTagParams>),
-    NotifyWriteTag(ParamWrapperCap<NotifyWriteTagParams>),
+    NotifyWriteTag(ParamWrapperCap<NotifyWriteTags>),
     ErrorWriteTag(ErrorInfo),
 
     // Alarms
@@ -251,26 +282,38 @@ impl Connection {
     where P: AsRef<Path>
     {
         let stream = UnixStream::connect(path).await?;
-        let (r,w) = stream.into_split();
-        let (msg_in, msg_out) = mpsc::channel(10);
-        tokio::spawn(read_connection(r, msg_in));
-        Ok(Connection {
-            stream: w,
-            cookie_prefix: format!("cookie_{}_", process::id()),
-            cookie_count: 0,
-            replies: msg_out
-        })
+        Ok(Self::from_stream(stream))
     }
 
+    fn from_stream(stream: UnixStream) -> Connection
+    {
+	let (r,w) = stream.into_split();
+        let (msg_in, msg_out) = mpsc::channel(10);
+        tokio::spawn(read_connection(r, msg_in));
+        Connection {
+	    stream: w,
+	    cookie_prefix: format!("cookie_{}_", process::id()),
+	    cookie_count: 0,
+	    replies: msg_out
+        }
+    }
+    
     fn get_cookie(&mut self) -> String
     {
         self.cookie_count = self.cookie_count.wrapping_add(1);
         self.cookie_prefix.clone()+&self.cookie_count.to_string()
     }
 
-    pub async fn get_event(&mut self) -> Option<Message> {
+    pub async fn get_message(&mut self) -> Option<Message> {
         self.replies.recv().await
     }
+
+    pub async fn send_message(&mut self, msg: &Message) -> Result<()>
+    {
+	send_cmd(&mut self.stream, msg).await?;
+	Ok(())
+    }
+    
     pub async fn subscribe_tags(&mut self, tags: &[&str])
                                 -> Result<String> 
     {
@@ -285,6 +328,34 @@ impl Connection {
         Ok(cmd.client_cookie)
     }
 
+    pub async fn notify_subscibe_tags(&mut self,
+				      tags: NotifyTags,
+				      cookie: &str)
+				      -> Result<()> 
+    {
+	let cmd = Message {
+            message: MessageVariant::NotifySubscribeTag(tags.into()),
+            client_cookie: cookie.to_string()
+        };
+	send_cmd(&mut self.stream, &cmd).await?;
+        Ok(())
+    }
+    
+    pub async fn error_subscibe_tags(&mut self,
+				     error_code: u32,
+				     error_description: String,
+				      cookie: &str)
+				      -> Result<()> 
+    {
+	let cmd = Message {
+            message: MessageVariant::ErrorSubscribeTag(
+		ErrorInfo{error_code, error_description}),
+            client_cookie: cookie.to_string()
+        };
+	send_cmd(&mut self.stream, &cmd).await?;
+        Ok(())
+    }
+    
     pub async fn unsubscribe_tags(&mut self, cookie: &str)
                                   -> Result<String> 
     {
@@ -295,7 +366,19 @@ impl Connection {
         send_cmd(&mut self.stream, &cmd).await?;
         Ok(cmd.client_cookie)
     }
-
+    
+    pub async fn notify_unsubscibe_tags(&mut self,
+					cookie: &str)
+					-> Result<()> 
+    {
+	let cmd = Message {
+            message: MessageVariant::NotifyUnsubscribeTag,
+            client_cookie: cookie.to_string()
+        };
+	send_cmd(&mut self.stream, &cmd).await?;
+        Ok(())
+    }
+    
     pub async fn write_tags(&mut self, tags: &[WriteTagValue]) -> Result<()>
     {
         let cmd = Message {
@@ -314,7 +397,7 @@ impl Connection {
         let cmd = Message {
             message: MessageVariant::SubscribeAlarm(ParamWrapperCap{
                 params: SubscribeAlarmParams {
-                    system_names: Vec::new(),
+                    system_names: None,
                     filter: None,
                     language_id: None
                 }}),
@@ -338,6 +421,19 @@ impl Connection {
     
 }
 
+ pub async fn listen<P, H, F>(path: P, handler: H) 
+			-> std::io::Result<()>
+where H: Fn(Connection) -> F,
+      F: Future<Output = ()> + Send + 'static,
+      P: AsRef<Path>
+{
+     let listener = UnixListener::bind(path)?;
+     loop {
+         let (stream, _addr) = listener.accept().await?;
+	 let conn = Connection::from_stream(stream);
+	 tokio::spawn(handler(conn));
+     }
+ }
 
 #[test]
     fn serialize_test()
@@ -347,11 +443,13 @@ impl Connection {
             params: NotifyTags {
                 tags: vec![
                     NotifyTag {
-                        name: "Value".to_string(),
-                        quality: "Good".to_string(),
-                        quality_code: 192,
+			data: TagData {
+                            name: "Value".to_string(),
+                            quality: "Good".to_string(),
+                            quality_code: 192,
+                            value: "32".to_string(),
+			},
                         time_stamp: "2021-03-23T11:23:11Z".to_string(),
-                        value: "32".to_string(),
                         error: ErrorInfo {
                             error_code: 29100,
                             error_description: "Error".to_string()
