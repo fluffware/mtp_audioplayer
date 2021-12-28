@@ -39,13 +39,13 @@ impl TagServer {
     fn build_notify_tags(tag_map: &HashMap<String, TagData>, tags: &[String]) -> NotifyTags {
         let mut tag_notifications = Vec::new();
         if tags.is_empty() {
-	    for (_, tag_data) in tag_map {
-		tag_notifications.push(NotifyTag {
+            for (_, tag_data) in tag_map {
+                tag_notifications.push(NotifyTag {
                     data: (*tag_data).clone(),
                     time_stamp: Utc::now().to_rfc3339(),
                     error: ErrorInfo::default(),
                 });
-	    }
+            }
         } else {
             for tag in tags {
                 if let Some(tag_data) = tag_map.get(tag) {
@@ -218,19 +218,24 @@ impl TagServer {
     }
 }
 
+#[cfg(test)]
+use std::sync::Arc;
+
 #[test]
 fn test_subscribe() {
     let mut server = TagServer::new(false);
     let mut notifications = HashSet::new();
     server.set_tag_value("Tag0", "0", &mut notifications);
     server.set_tag_value("Tag1", "1", &mut notifications);
+    let mut notify: Arc<ReplyFn> = Arc::new(Mutex::new(|msg| {
+        println!("Notify: {:?}", msg);
+        Ok(())
+    }));
+    
     server.subscribe(
         &["Tag0".to_string(), "Tag1".to_string()],
         "dsjalk",
-        Arc::new(Mutex::new(|msg| {
-            println!("Notify: {:?}", msg);
-            Ok(())
-        })),
+        Arc::downgrade(&notify)
     );
     server.set_tag_value("Tag1", "2", &mut notifications);
     server.send_tag_notifications(&notifications, None);

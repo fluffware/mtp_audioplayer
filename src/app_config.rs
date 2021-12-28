@@ -332,6 +332,57 @@ impl Drop for ToggleObserver
     }
 }
 
+struct WhileEqualObserver {
+    action: Arc<dyn Action + Send + Sync>,
+    cancel: Option<CancellationToken>,
+    equals: i32,
+}
+
+impl WhileEqualObserver {
+    pub fn new(action: Arc<dyn Action + Send + Sync>, equals: i32) -> WhileEqualObserver
+    {
+	WhileEqualObserver{
+	    action,
+	    cancel: None,
+            equals,
+	}
+    }
+}
+
+impl TagObserver for WhileEqualObserver {
+    fn tag_changed(&mut self, _name: &str, old_value: &Option<&str>, new_value: &str) -> bool {
+        if let Ok(new_value) = new_value.parse::<i32>() {
+            if let Some(old_value) = old_value.and_then(|v| v.parse::<i32>().ok()) {
+                if old_value != new_value {
+		    if let Some(cancel) = self.cancel.take() {
+		        cancel.cancel();
+		    }
+                    if new_value == self.equals {
+                        let action = self.action.clone();
+		        let cancel = CancellationToken::new();
+		        self.cancel = Some(cancel.clone());
+                        tokio::spawn(async move {
+                            tokio::select! {
+                                _ = action.run() => {},
+                                _ = cancel.cancelled() => {},
+                            }
+                        });
+                    }
+                }
+            }
+        }
+        true
+    }
+}
+
+impl Drop for WhileEqualObserver
+{
+    fn drop(&mut self) {
+	if let Some(cancel) = self.cancel.take() {
+	    cancel.cancel();
+	}
+    }
+}
 pub fn setup_tags(
     player_conf: &PlayerConfig,
     playback_ctxt: &PlaybackContext,
@@ -345,7 +396,10 @@ pub fn setup_tags(
 	    TagTriggerType::Toggle => {
 		tag_ctxt.add_observer(name.to_string(), Box::new(ToggleObserver::new(action)));
 	    },
-	    _ => {}
+            TagTriggerType::Equals{value} => {
+		tag_ctxt.add_observer(name.to_string(), Box::new(WhileEqualObserver::new(action, value)));
+            },
+	    //_ => {}
 	}
     }
     Ok(tag_ctxt)

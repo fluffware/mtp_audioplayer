@@ -71,43 +71,6 @@
 	<play priority="2">SoundAlarm</play>
       </sequence>
     </parallel>
-  </actions>
-  <tags>
-    <toggle tag="SoundAlarm">
-      <play>SoundAlarm</play>
-    </toggle>
-    <toggle tag="SoundInc">
-      <play>SoundInfo</play>
-    </toggle>
-    <toggle tag="SoundExe">
-      <play>SoundExe</play>
-    </toggle>
-    <toggle tag="SoundDec">
-      <play>SoundDec</play>
-    </toggle>
-    <!--<toggle tag="AlarmRestart">
-      <alarm_restart/>
-    </toggle>
-    <equals tag="AlarmProfile" value="0">
-      <set_profile>Normal</set_profile>
-    </equals>
-    <equals tag="AlarmProfile" value="1">
-      <set_profile>Operation</set_profile>
-    </equals>-->
-  </tags>
-  <alarms>
-    <filter id="AlarmsUnacked">
-      <class>Larm</class>
-      <unacked/>
-    </filter>
-    <filter id="AlarmsRaised">
-      <class>Larm</class>
-      <raised/>
-    </filter>
-    <filter id="Warnings">
-      <class>Varning</class>
-      <raised/>
-    </filter>
     <sequence id="AlarmRepeat">
       <repeat>
 	<repeat count="20">
@@ -133,6 +96,55 @@
     <sequence id="InfoOnce">
       <play>SoundInfo</play>
     </sequence>
+  </actions>
+  <tags>
+    <toggle tag="SoundAlarm">
+      <play>SoundAlarm</play>
+    </toggle>
+    <toggle tag="SoundInc">
+      <play>SoundInfo</play>
+    </toggle>
+    <toggle tag="SoundExe">
+      <play>SoundExe</play>
+    </toggle>
+    <toggle tag="SoundDec">
+      <play>SoundDec</play>
+    </toggle>
+    <equals tag="AlarmProfile" value="0">
+      <repeat>
+	<play>A</play>
+	<wait>0.5s</wait>
+      </repeat>
+    </equals>
+    <equals tag="AlarmProfile" value="1">
+      <repeat>
+	<play>B</play>
+	<wait>0.5s</wait>
+      </repeat>
+    </equals>
+    <!--<toggle tag="AlarmRestart">
+      <alarm_restart/>
+    </toggle>
+    <equals tag="AlarmProfile" value="0">
+      <set_profile>Normal</set_profile>
+    </equals>
+    <equals tag="AlarmProfile" value="1">
+      <set_profile>Operation</set_profile>
+    </equals>-->
+  </tags>
+  <alarms>
+    <filter id="AlarmsUnacked">
+      <class>Larm</class>
+      <unacked/>
+    </filter>
+    <filter id="AlarmsRaised">
+      <class>Larm</class>
+      <raised/>
+    </filter>
+    <filter id="Warnings">
+      <class>Varning</class>
+      <raised/>
+    </filter>
     <profile id="Normal">
       <while filter="AlarmUnacked" state="not_empty">
 	<action use="AlarmRepeat"/>
