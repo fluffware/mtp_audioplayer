@@ -7,9 +7,9 @@ use nom::character::complete::char;
 use nom::character::complete::digit1;
 use nom::character::complete::multispace0;
 use nom::character::complete::none_of;
-use nom::combinator::map;
+use nom::combinator::{eof, map};
 use nom::multi::fold_many0;
-use nom::sequence::{delimited, preceded, tuple};
+use nom::sequence::{delimited, preceded, terminated, tuple};
 use nom::IResult;
 use num_enum::TryFromPrimitive;
 use paste::paste;
@@ -528,7 +528,7 @@ fn parse_and(input: &str) -> IResult<&str, BoolOp, FilterError> {
 }
 
 pub fn parse_filter(input: &str) -> IResult<&str, BoolOp, FilterError> {
-    parse_or(input)
+    terminated(parse_or, eof)(input)
 }
 
 #[test]
@@ -647,4 +647,22 @@ fn test_alarm_state() {
         Ok("RaisedAcknowledgedCleared")
     );
     assert_eq!(AlarmState::from_str("8").map(|s| s.as_str()), Ok("Removed"));
+}
+
+#[test]
+fn test_filter_parser_failure() {
+    let res = parse_filter("AlarmClassName = 'ad' OR ");
+    if let Err(nom::Err::Error(FilterError{input: " OR ", kind: FilterErrorKind::Nom(Eof)})) = res {
+	/* Nop */
+    } else {
+	panic!("Unexpected result: {:?}", res);
+    }
+    
+    let res = parse_filter("AlarmClassName + 8");
+    if let Err(nom::Err::Error(FilterError{input: "+ 8", kind: FilterErrorKind::Nom(Tag)})) = res {
+	/* Nop */
+    } else {
+	panic!("Unexpected result: {:?}", res);
+    }
+
 }
