@@ -27,3 +27,7 @@ nom="7.1"
 warp="0.3"
 chrono="0.4"
 
+num_enum="0.5"
+const-str="0.3"
+paste="1.0"
+

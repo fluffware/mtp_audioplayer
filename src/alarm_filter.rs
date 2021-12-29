@@ -1,4 +1,5 @@
 use crate::open_pipe::connection::NotifyAlarm;
+use const_str::convert_ascii_case;
 use nom::branch::alt;
 use nom::bytes::complete::tag;
 use nom::character::complete::alpha1;
@@ -8,13 +9,17 @@ use nom::character::complete::multispace0;
 use nom::character::complete::none_of;
 use nom::combinator::map;
 use nom::multi::fold_many0;
-use nom::sequence::{preceded, terminated, tuple};
+use nom::sequence::{delimited, preceded, tuple};
 use nom::IResult;
+use num_enum::TryFromPrimitive;
+use paste::paste;
 use std::fmt::Debug;
 use std::fmt::{self, Display, Formatter};
+use std::str::FromStr;
 
-#[derive(Debug)]
-enum AlarmState {
+#[derive(PartialEq, Debug, Clone, Copy, TryFromPrimitive)]
+#[repr(u32)]
+pub enum AlarmState {
     Normal = 0,
     Raised = 1,
     RaisedCleared = 2,
@@ -22,6 +27,97 @@ enum AlarmState {
     RaisedAcknowledgedCleared = 6,
     RaisedClearedAcknowledged = 7,
     Removed = 8,
+}
+use AlarmState::*;
+
+// Define a string constant and a lowercase version with _LC appended to the name
+macro_rules! makelc {
+    ($n: ident, $str: expr) => {
+        const $n: &str = $str;
+        paste! {const [<$n _LC>]: &str = convert_ascii_case!(lower, $str);}
+    };
+}
+
+const INCOMING_LC: &str = "incoming";
+const OUTGOING_LC: &str = "outgoing";
+const ACKNOWLEDGED_LC: &str = "acknowledged";
+const INCOMING_SHORT_LC: &str = "in";
+const OUTGOING_SHORT_LC: &str = "out";
+const ACKNOWLEDGED_SHORT_LC: &str = "ack";
+
+makelc!(NORMAL, "Normal");
+makelc!(REMOVED, "Removed");
+makelc!(RAISED, "Raised");
+makelc!(RAISED_CLEARED, "RaisedCleared");
+makelc!(RAISED_ACKNOWLEDGED, "RaisedAcknowledged");
+makelc!(RAISED_ACKNOWLEDGED_CLEARED, "RaisedAcknowledgedCleared");
+makelc!(RAISED_CLEARED_ACKNOWLEDGED, "RaisedClearedAcknowledged");
+
+#[derive(Debug, PartialEq)]
+pub struct AlarmStateError(String);
+
+impl std::error::Error for AlarmStateError {}
+
+impl Display for AlarmStateError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), fmt::Error> {
+        Display::fmt(&self.0, f)
+    }
+}
+
+impl FromStr for AlarmState {
+    type Err = AlarmStateError;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if let Ok(state_num) = s.parse::<u32>() {
+            return AlarmState::try_from(state_num).map_err(|_| {
+                AlarmStateError(format!("Integer {} is not a valid alarm state", state_num))
+            });
+        }
+        let lc = s.to_lowercase();
+        let list: Vec<&str> = lc.split(|c| c == ' ' || c == ',' || c == '/').collect();
+
+        match list.as_slice() {
+            [NORMAL_LC] => Ok(AlarmState::Normal),
+            [INCOMING_LC] | [INCOMING_SHORT_LC] | [RAISED_LC] => Ok(Raised),
+
+            [INCOMING_LC, OUTGOING_LC]
+            | [INCOMING_SHORT_LC, OUTGOING_SHORT_LC]
+            | [RAISED_CLEARED_LC] => Ok(RaisedCleared),
+
+            [INCOMING_LC, ACKNOWLEDGED_LC]
+            | [INCOMING_SHORT_LC, ACKNOWLEDGED_SHORT_LC]
+            | [RAISED_ACKNOWLEDGED_LC] => Ok(RaisedAcknowledged),
+
+            [INCOMING_LC, ACKNOWLEDGED_LC, OUTGOING_LC]
+            | [INCOMING_SHORT_LC, ACKNOWLEDGED_SHORT_LC, OUTGOING_SHORT_LC]
+            | [RAISED_ACKNOWLEDGED_CLEARED_LC] => Ok(RaisedAcknowledgedCleared),
+
+            [INCOMING_LC, OUTGOING_LC, ACKNOWLEDGED_LC]
+            | [INCOMING_SHORT_LC, OUTGOING_SHORT_LC, ACKNOWLEDGED_SHORT_LC]
+            | [RAISED_CLEARED_ACKNOWLEDGED_LC] => Ok(RaisedClearedAcknowledged),
+
+            [REMOVED_LC] => Ok(AlarmState::Removed),
+            _ => {
+                return Err(AlarmStateError(format!(
+                    "String \"{}\" is not a valid alarm state",
+                    s
+                )))
+            }
+        }
+    }
+}
+
+impl AlarmState {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Normal => NORMAL,
+            Raised => RAISED,
+            RaisedCleared => RAISED_CLEARED,
+            RaisedAcknowledged => RAISED_ACKNOWLEDGED,
+            RaisedAcknowledgedCleared => RAISED_ACKNOWLEDGED_CLEARED,
+            RaisedClearedAcknowledged => RAISED_CLEARED_ACKNOWLEDGED,
+            Removed => REMOVED,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -79,10 +175,11 @@ pub enum BoolOp {
     Not(Box<BoolOp>),
     And(Box<BoolOp>, Box<BoolOp>),
     Or(Box<BoolOp>, Box<BoolOp>),
-    StringEqual(Box<StringCriterion>, String),
-    IntEqual(Box<IntCriterion>, i32),
-    IntLess(Box<IntCriterion>, i32),
-    IntLessEqual(Box<IntCriterion>, i32),
+    StringEqual(StringCriterion, String),
+    StateEqual(IntCriterion, AlarmState),
+    IntEqual(IntCriterion, i32),
+    IntLess(IntCriterion, i32),
+    IntLessEqual(IntCriterion, i32),
 }
 
 use BoolOp::*;
@@ -94,6 +191,7 @@ impl BoolOp {
             And(arg1, arg2) => arg1.evaluate(alarm) && arg2.evaluate(alarm),
             Or(arg1, arg2) => arg1.evaluate(alarm) || arg2.evaluate(alarm),
             StringEqual(criterion, value) => criterion.evaluate(alarm) == value,
+            StateEqual(criterion, state) => criterion.evaluate(alarm) == *state as i32,
             IntEqual(criterion, value) => criterion.evaluate(alarm) == *value,
             IntLess(criterion, value) => criterion.evaluate(alarm) < *value,
             IntLessEqual(criterion, value) => criterion.evaluate(alarm) <= *value,
@@ -113,7 +211,9 @@ impl ToString for BoolOp {
             }
 
             StringEqual(criterion, value) => criterion.as_str().to_owned() + " = '" + &value + "'",
-
+            StateEqual(criterion, state) => {
+                criterion.as_str().to_owned() + " = '" + &state.as_str() + "'"
+            }
             IntEqual(criterion, value) => {
                 criterion.as_str().to_owned() + " = " + &value.to_string()
             }
@@ -128,7 +228,8 @@ impl ToString for BoolOp {
 #[derive(Debug)]
 pub enum FilterErrorKind {
     InvalidCriterionName,
-    IllegalCheckOpereation,
+    IllegalCheckOperation,
+    InvalidState,
     Nom(nom::error::ErrorKind),
     Error(Box<dyn std::error::Error + Send + Sync + 'static>),
 }
@@ -139,8 +240,11 @@ impl Display for FilterErrorKind {
             FilterErrorKind::InvalidCriterionName => {
                 write!(f, "Name of filter criterion not recognized")
             }
-            FilterErrorKind::IllegalCheckOpereation => {
+            FilterErrorKind::IllegalCheckOperation => {
                 write!(f, "Illegal comparison operator")
+            }
+            FilterErrorKind::InvalidState => {
+                write!(f, "Invalid state descriptor")
             }
             FilterErrorKind::Nom(err) => {
                 write!(f, "{}", err.description())
@@ -167,13 +271,6 @@ impl Display for FilterError<'_> {
 }
 
 impl FilterError<'_> {
-    fn nom<'a>(err: nom::error::Error<&'a str>) -> FilterError<'a> {
-        FilterError {
-            input: err.input,
-            kind: FilterErrorKind::Nom(err.code),
-        }
-    }
-
     fn map_failure<'a, O, E>(
         input: &'a str,
         res: Result<O, E>,
@@ -202,30 +299,37 @@ impl<'a> nom::error::ParseError<&'a str> for FilterError<'a> {
         other
     }
 }
-
-impl<'a> From<nom::error::Error<&'a str>> for FilterError<'a> {
-    fn from(nom_err: nom::error::Error<&'a str>) -> Self {
-        FilterError {
-            input: nom_err.input,
-            kind: FilterErrorKind::Nom(nom_err.code),
-        }
-    }
+macro_rules! build_error {
+    ($input:expr, $kind: expr) => {{
+        use FilterErrorKind::*;
+        Err(nom::Err::Error(FilterError {
+            input: $input,
+            kind: $kind,
+        }))
+    }};
+}
+macro_rules! build_failure {
+    ($input:expr, $kind: expr) => {{
+        use FilterErrorKind::*;
+        Err(nom::Err::Failure(FilterError {
+            input: $input,
+            kind: $kind,
+        }))
+    }};
 }
 
-fn string_literal(input: &str) -> IResult<&str, String> {
-    preceded(
+fn string_literal(input: &str) -> IResult<&str, String, FilterError> {
+    delimited(
         char('\''),
-        terminated(
-            fold_many0(
-                alt((none_of("'"), map(tag("''"), |_| '\''))),
-                String::new,
-                |mut string, ch| {
-                    string.push(ch);
-                    string
-                },
-            ),
-            char('\''),
+        fold_many0(
+            alt((none_of("'"), map(tag("''"), |_| '\''))),
+            String::new,
+            |mut string, ch| {
+                string.push(ch);
+                string
+            },
         ),
+        char('\''),
     )(input)
 }
 
@@ -236,13 +340,8 @@ fn string_criterion(input: &str) -> IResult<&str, BoolOp, FilterError> {
         alt((tag("="), tag("!="))),
         multispace0,
         string_literal,
-    ))(input)
-    .map_err(|e| match e {
-        nom::Err::Error(e) => nom::Err::Error(FilterError::nom(e)),
-        nom::Err::Failure(e) => nom::Err::Failure(FilterError::nom(e)),
-        nom::Err::Incomplete(needed) => nom::Err::Incomplete(needed),
-    })?;
-    let criterion = Box::new(match field {
+    ))(input)?;
+    let criterion = match field {
         "AlarmClassName" => StringCriterion::AlarmClassName,
         "AlarmName" => StringCriterion::AlarmName,
         _ => {
@@ -251,7 +350,7 @@ fn string_criterion(input: &str) -> IResult<&str, BoolOp, FilterError> {
                 kind: FilterErrorKind::InvalidCriterionName,
             }))
         }
-    });
+    };
     Ok((
         input,
         match op {
@@ -260,7 +359,7 @@ fn string_criterion(input: &str) -> IResult<&str, BoolOp, FilterError> {
             _ => {
                 return Err(nom::Err::Error(FilterError {
                     input,
-                    kind: FilterErrorKind::IllegalCheckOpereation,
+                    kind: FilterErrorKind::IllegalCheckOperation,
                 }))
             }
         },
@@ -279,45 +378,64 @@ fn int_criterion(input: &str) -> IResult<&str, BoolOp, FilterError> {
             tag(">"),
         )),
         multispace0,
-        digit1,
-    ))(input)
-    .map_err(|e| match e {
-        nom::Err::Error(e) => nom::Err::Error(FilterError::nom(e)),
-        nom::Err::Failure(e) => nom::Err::Failure(FilterError::nom(e)),
-        nom::Err::Incomplete(needed) => nom::Err::Incomplete(needed),
-    })?;
-    let criterion = Box::new(match field {
+        nom::character::complete::i32,
+    ))(input)?;
+    let criterion = match field {
         "ID" => IntCriterion::Id,
         "InstanceID" => IntCriterion::InstanceId,
         "Priority" => IntCriterion::Priority,
-        "State" => IntCriterion::AlarmState,
         _ => {
             return Err(nom::Err::Error(FilterError {
                 input,
                 kind: FilterErrorKind::InvalidCriterionName,
             }))
         }
-    });
-    let value = FilterError::map_failure(input, value.parse())?;
+    };
+    use BoolOp::*;
     Ok((
         input,
         match op {
-            "=" => BoolOp::IntEqual(criterion, value),
-            "!=" => BoolOp::Not(Box::new(BoolOp::IntEqual(criterion, value))),
-            "<" => BoolOp::IntLess(criterion, value),
-            "<=" => BoolOp::IntLessEqual(criterion, value),
-            ">=" => BoolOp::Not(Box::new(BoolOp::IntLess(criterion, value))),
-            ">" => BoolOp::Not(Box::new(BoolOp::IntLessEqual(criterion, value))),
+            "=" => IntEqual(criterion, value),
+            "!=" => Not(Box::new(BoolOp::IntEqual(criterion, value))),
+            "<" => IntLess(criterion, value),
+            "<=" => IntLessEqual(criterion, value),
+            ">=" => Not(Box::new(BoolOp::IntLess(criterion, value))),
+            ">" => Not(Box::new(BoolOp::IntLessEqual(criterion, value))),
             _ => {
                 return Err(nom::Err::Error(FilterError {
                     input,
-                    kind: FilterErrorKind::IllegalCheckOpereation,
+                    kind: FilterErrorKind::IllegalCheckOperation,
                 }))
             }
         },
     ))
 }
 
+fn state_criterion(input: &str) -> IResult<&str, BoolOp, FilterError> {
+    let (input, (_, _, op, _, value)) = tuple((
+        tag("State"),
+        multispace0,
+        alt((tag("!="), tag("="))),
+        multispace0,
+        map(
+            alt((string_literal, map(digit1, |s: &str| s.to_owned()))),
+            |v| AlarmState::from_str(&v),
+        ),
+    ))(input)?;
+    let criterion = IntCriterion::AlarmState;
+    let value = match value {
+        Ok(v) => v,
+        Err(e) => return build_failure!(input, Error(Box::new(e))),
+    };
+    Ok((
+        input,
+        match op {
+            "=" => BoolOp::StateEqual(criterion, value),
+            "!=" => BoolOp::Not(Box::new(BoolOp::StateEqual(criterion, value))),
+            _ => return build_error!(input, IllegalCheckOperation),
+        },
+    ))
+}
 /*
 Left recursive
 or := or "OR" or | and
@@ -337,7 +455,7 @@ arg := "(" expr ")" | comp
 
  */
 fn parse_criterion(input: &str) -> IResult<&str, BoolOp, FilterError> {
-    alt((int_criterion, string_criterion))(input)
+    alt((state_criterion, int_criterion, string_criterion))(input)
 }
 
 fn parse_parenthesis(input: &str) -> IResult<&str, BoolOp, FilterError> {
@@ -434,24 +552,24 @@ fn test_criterion_parser() {
         "NOT (Priority = 45)"
     );
     assert_eq!(
-        int_criterion("State = 4").unwrap().1.to_string(),
-        "State = 4"
+        state_criterion("State = 2").unwrap().1.to_string(),
+        "State = 'RaisedCleared'"
     );
     assert_eq!(
-        int_criterion("State< 6").unwrap().1.to_string(),
-        "State < 6"
+        int_criterion("Priority< 6").unwrap().1.to_string(),
+        "Priority < 6"
     );
     assert_eq!(
-        int_criterion("State<= 6").unwrap().1.to_string(),
-        "State <= 6"
+        int_criterion("Priority<= 6").unwrap().1.to_string(),
+        "Priority <= 6"
     );
     assert_eq!(
-        int_criterion("State  > 9").unwrap().1.to_string(),
-        "NOT (State <= 9)"
+        int_criterion("Priority  > 9").unwrap().1.to_string(),
+        "NOT (Priority <= 9)"
     );
     assert_eq!(
-        int_criterion("State >= 6").unwrap().1.to_string(),
-        "NOT (State < 6)"
+        int_criterion("Priority >= 6").unwrap().1.to_string(),
+        "NOT (Priority < 6)"
     );
 }
 
@@ -465,24 +583,68 @@ fn test_filter_parser() {
         "(AlarmClassName = 'adjk') AND (Priority < 8)"
     );
     assert_eq!(
-        parse_filter("AlarmClassName = 'ad' AND State = 8 OR State = 4")
+        parse_filter("AlarmClassName = 'ad' AND State = 8 OR State = 5")
             .unwrap()
             .1
             .to_string(),
-        "((AlarmClassName = 'ad') AND (State = 8)) OR (State = 4)"
+        "((AlarmClassName = 'ad') AND (State = 'Removed')) OR (State = 'RaisedAcknowledged')"
     );
     assert_eq!(
-        parse_filter("AlarmClassName = 'ad' AND (State = 8 OR State = 4)")
+        parse_filter("AlarmClassName = 'ad' AND (State = 8 OR State = 'norMAL')")
             .unwrap()
             .1
             .to_string(),
-        "(AlarmClassName = 'ad') AND ((State = 8) OR (State = 4))"
+        "(AlarmClassName = 'ad') AND ((State = 'Removed') OR (State = 'Normal'))"
     );
     assert_eq!(
-        parse_filter("AlarmClassName = 'ad' OR NOT State = 8 AND State = 4")
+        parse_filter("AlarmClassName = 'ad' OR NOT State = 'RaisedClearedAcknowledged' AND State = 'RaisedAcknowledgedCleared'")
             .unwrap()
             .1
             .to_string(),
-        "(AlarmClassName = 'ad') OR ((NOT (State = 8)) AND (State = 4))"
+        "(AlarmClassName = 'ad') OR ((NOT (State = 'RaisedClearedAcknowledged')) AND (State = 'RaisedAcknowledgedCleared'))"
     );
+}
+
+#[test]
+fn test_alarm_state() {
+    assert_eq!(AlarmState::from_str("NOrmal"), Ok(AlarmState::Normal));
+    assert_eq!(
+        AlarmState::from_str("in,ack"),
+        Ok(AlarmState::RaisedAcknowledged)
+    );
+    assert_eq!(
+        AlarmState::from_str("in,ack,out"),
+        Ok(AlarmState::RaisedAcknowledgedCleared)
+    );
+    assert_eq!(
+        AlarmState::from_str("incoming outgoing acknowledged"),
+        Ok(AlarmState::RaisedClearedAcknowledged)
+    );
+    assert_eq!(AlarmState::from_str("REMOVED"), Ok(AlarmState::Removed));
+    assert_eq!(
+        AlarmState::from_str("7"),
+        Ok(AlarmState::RaisedClearedAcknowledged)
+    );
+    assert_eq!(AlarmState::from_str("1").map(|s| s.as_str()), Ok("Raised"));
+    assert_eq!(
+        AlarmState::from_str("normal").map(|s| s.as_str()),
+        Ok("Normal")
+    );
+    assert_eq!(
+        AlarmState::from_str("raisedcleared").map(|s| s.as_str()),
+        Ok("RaisedCleared")
+    );
+    assert_eq!(
+        AlarmState::from_str("incoming,acknowledged").map(|s| s.as_str()),
+        Ok("RaisedAcknowledged")
+    );
+    assert_eq!(
+        AlarmState::from_str("in,out ack").map(|s| s.as_str()),
+        Ok("RaisedClearedAcknowledged")
+    );
+    assert_eq!(
+        AlarmState::from_str("in/ack/out").map(|s| s.as_str()),
+        Ok("RaisedAcknowledgedCleared")
+    );
+    assert_eq!(AlarmState::from_str("8").map(|s| s.as_str()), Ok("Removed"));
 }
