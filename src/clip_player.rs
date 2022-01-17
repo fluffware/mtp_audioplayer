@@ -1,110 +1,139 @@
-use alsa::pcm::PCM;
-use alsa::pcm::Format;
-use alsa::pcm::Access;
-use alsa::pcm::HwParams;
-use alsa::Direction;
-use alsa::ValueOr;
-use alsa::nix::errno::Errno;
-use std::ffi::CString;
-use std::sync::{Arc};
-use std::sync::{Mutex, MutexGuard, Condvar};
-use std::sync::atomic::{AtomicU32, Ordering};
-use std::future::{self,Future};
-use std::task::{Context, Waker, Poll};
-use std::thread;
-use std::pin::Pin;
-use std::time::Duration;
+use cpal::traits::DeviceTrait;
+use cpal::traits::HostTrait;
+use cpal::traits::StreamTrait;
+use cpal::BufferSize;
+use cpal::Device;
+use cpal::SampleFormat;
+use cpal::SampleRate;
+use cpal::StreamConfig;
+use log::{debug, error, info};
 use std::convert::TryFrom;
-use log::{debug,error};
+use std::future::{self, Future};
+use std::mem;
 use std::ops::Deref;
 use std::ops::DerefMut;
-use std::mem;
-
+use std::pin::Pin;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Arc;
+use std::sync::{Condvar, Mutex, MutexGuard};
+use std::task::{Context, Poll, Waker};
+use std::thread;
+use std::time::Duration;
 
 #[derive(Debug, Clone)]
-pub struct ClipPlayer
-{
-    control: Arc<PlaybackControl>
+pub struct ClipPlayer {
+    control: Arc<PlaybackControl>,
 }
 
 #[derive(Debug)]
-pub enum Error
-{
-    Alsa(alsa::Error),
-    Shutdown
+pub enum Error {
+    Devices(cpal::DevicesError),
+    Name(cpal::DeviceNameError),
+    BuildStream(cpal::BuildStreamError),
+    PlayStream(cpal::PlayStreamError),
+    ClipPlayer(String),
+    Shutdown,
 }
 
 impl std::error::Error for Error {}
 
-impl From<alsa::Error> for Error
-{
-    fn from(err: alsa::Error) -> Error
-    {
-        Error::Alsa(err)
+impl From<cpal::DevicesError> for Error {
+    fn from(err: cpal::DevicesError) -> Error {
+        Error::Devices(err)
+    }
+}
+
+impl From<cpal::DeviceNameError> for Error {
+    fn from(err: cpal::DeviceNameError) -> Error {
+        Error::Name(err)
+    }
+}
+
+impl From<cpal::BuildStreamError> for Error {
+    fn from(err: cpal::BuildStreamError) -> Error {
+        Error::BuildStream(err)
+    }
+}
+
+impl From<cpal::PlayStreamError> for Error {
+    fn from(err: cpal::PlayStreamError) -> Error {
+        Error::PlayStream(err)
+    }
+}
+
+impl From<String> for Error {
+    fn from(s: String) -> Error {
+        Error::ClipPlayer(s)
     }
 }
 
 impl std::fmt::Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>)
-           -> std::result::Result<(), std::fmt::Error>
-    {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::result::Result<(), std::fmt::Error> {
         match self {
-            Error::Alsa(e) => e.fmt(f),
+            Error::Devices(e) => e.fmt(f),
+            Error::Name(e) => e.fmt(f),
+            Error::BuildStream(e) => e.fmt(f),
+            Error::PlayStream(e) => e.fmt(f),
+            Error::ClipPlayer(e) => e.fmt(f),
             Error::Shutdown => {
-                write!(f,"Playback thread shutdown")
+                write!(f, "Playback thread shutdown")
             }
         }
     }
 }
-        
+
 //const samples: [i16;10000] = [0i16;10000];
 
 #[derive(Debug)]
-enum PlaybackState
-{
+enum PlaybackState {
     Setup, // Initializing playback thread
     Ready, // Ready to play samples. Set by thread
     // Play samples. Set by client
-    Playing{seqno: u32, samples:Arc<Vec<i16>>},
-    Cancel, // Cancel current playback. Set by client
+    Playing { seqno: u32, samples: Arc<Vec<i16>> },
+    Cancel,       // Cancel current playback. Set by client
     Error(Error), // Set by thread. Set to Ready to clear
-    Shutdown, // Tell the thread to exit.
-    Done // The thread has exited
+    Shutdown,     // Tell the thread to exit.
+    Done,         // The thread has exited
 }
 
 impl std::fmt::Display for PlaybackState {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>)
-           -> std::result::Result<(), std::fmt::Error>
-    {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::result::Result<(), std::fmt::Error> {
         match self {
-            PlaybackState::Setup => write!(f,"Setup"),
-            PlaybackState::Ready => write!(f,"Ready"),
-            PlaybackState::Playing{seqno,samples} => 
-                write!(f,"Playing(Seq: {}, Len: {}", seqno, samples.len()),
-            PlaybackState::Cancel => write!(f,"Cancel"),
-            PlaybackState::Error(e) => write!(f,"Error({})",e),
-            PlaybackState::Shutdown => write!(f,"Shutdown"),
-            PlaybackState::Done => write!(f,"Done"),
+            PlaybackState::Setup => write!(f, "Setup"),
+            PlaybackState::Ready => write!(f, "Ready"),
+            PlaybackState::Playing { seqno, samples } => {
+                write!(f, "Playing(Seq: {}, Len: {}", seqno, samples.len())
+            }
+            PlaybackState::Cancel => write!(f, "Cancel"),
+            PlaybackState::Error(e) => write!(f, "Error({})", e),
+            PlaybackState::Shutdown => write!(f, "Shutdown"),
+            PlaybackState::Done => write!(f, "Done"),
         }
     }
 }
-        
 
-#[derive(Debug)]
-struct PlaybackControl
-{
+struct PlaybackControl {
     state: Mutex<PlaybackState>,
     cond: Condvar,
-    waker: Mutex<Option<Waker>>
+    waker: Mutex<Option<Waker>>,
 }
 
-impl PlaybackControl
-{
-    fn change_state(&self,
-                    guard: &mut MutexGuard<PlaybackState>, 
-                    state: PlaybackState)
-                    -> PlaybackState
-    {
+impl std::fmt::Debug for PlaybackControl {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        write!(
+            f,
+            "PlaybackControl{{state: {:?}, cond: {:?}, waker: {:?}}}",
+            self.state, self.cond, self.waker
+        )
+    }
+}
+
+impl PlaybackControl {
+    fn change_state(
+        &self,
+        guard: &mut MutexGuard<PlaybackState>,
+        state: PlaybackState,
+    ) -> PlaybackState {
         let mut state = state;
         //debug!("State changed: {}", state);
         mem::swap(guard.deref_mut(), &mut state);
@@ -118,8 +147,7 @@ impl PlaybackControl
         state
     }
 
-    fn get_state_guard(&self) -> MutexGuard<PlaybackState>
-    { 
+    fn get_state_guard(&self) -> MutexGuard<PlaybackState> {
         match self.state.lock() {
             Ok(g) => g,
             Err(_) => {
@@ -127,152 +155,101 @@ impl PlaybackControl
             }
         }
     }
-    
-}
-    
-fn play_sample(pcm: &PCM, ctrl: &Arc<PlaybackControl>) -> Result<(), Error>
-{
-    let wait_delay;
-    let channels;
-    let frame_rate;
-    {
-        let hw_params = pcm.hw_params_current()?;
-        frame_rate = u64::from(hw_params.get_rate()?);
-        wait_delay = 1_000_000_000u64 * u64::try_from(hw_params.get_buffer_size()?).unwrap() / (frame_rate * 2);
-        channels = hw_params.get_channels()?;
-        
-    }
-    let mut pos: usize = 0;
-    //debug!("PCM state: {:?}", pcm.state());
-    pcm.drop()?;
-    pcm.prepare()?;
-    loop {
-        match {
-            let guard = ctrl.get_state_guard();
-            if let PlaybackState::Playing{samples, ..} = guard.deref() {
-                
-                let s = &samples[pos..];
-                if s.is_empty() {break}
-                //debug!("Writing {}", s.len());
-                pcm.io_i16()?.writei(s)
-            } else {
-                // Playback was canceled
-                pcm.drop()?;
-                return Ok(())
-            }
-        } {
-            // Check result of write to PCM
-            Err(e) => {
-                match e.errno() {
-                    Errno::EAGAIN => {
-                        //debug!("Wait");
-                        let state = ctrl.get_state_guard();
-                        let _state = ctrl.cond.wait_timeout_while(
-                            state,
-                            Duration::from_nanos(wait_delay),
-                            |s| {
-                                matches!(s, PlaybackState::Playing{..})
-                            }).expect("Failed to wait for pcm buffer");
-                    },
-                    _ => {
-                        pcm.try_recover(e, true)?;
-                    },
-                }
-            },
-            Ok(w) => { 
-                //debug!("Wrote: {}",w);
-                pos += w * usize::try_from(channels).unwrap();
-            }
-        }
-        
-    }
-    
-    let state = ctrl.get_state_guard();
-    //debug!("Wait for clip to finish");
-    let delay = u64::try_from(pcm.delay()?).unwrap();
-    let left = 1_000_000_000u64 * delay / frame_rate;
-    let (_,res) = ctrl.cond.wait_timeout_while(
-        state,
-        Duration::from_nanos(left),
-        |s| {
-            matches!(s, PlaybackState::Playing{..})
-        }).expect("Failed to wait for clip completion");
-        
-    if res.timed_out() {
-        //debug!("Playback finished");
-        pcm.drain()?;
-    } else {
-        debug!("Playback canceled");
-        pcm.drop()?;
-    }
-    Ok(())
 }
 
-
-fn playback_thread(pcm: PCM, ctrl: Arc<PlaybackControl>)
-{
-    // Ready to play clips
-    
-    {
-        let mut guard = ctrl.get_state_guard();
-        ctrl.change_state(&mut guard, PlaybackState::Ready);
-    }
-
-    'main:
-    loop {
-        {
-            let mut guard = ctrl.get_state_guard();
-            loop {
-                match &*guard {
-                    PlaybackState::Shutdown => break 'main,
-                    PlaybackState::Playing{..} => break,
-                    _ => {}
-                }
-                guard = ctrl.cond.wait(guard)
-                    .expect("Failed to wait for state change");
-            }
-        }
-        match play_sample(&pcm, &ctrl) {
-            Err(e) => {
-                error!("Playback failed: {}",e);
-                if let  Ok(mut state) = ctrl.state.lock() {
-                    ctrl.change_state(&mut state, PlaybackState::Error(e));
+fn playback_thread(device: Device, stream_config: StreamConfig, ctrl: Arc<PlaybackControl>) {
+    let mut current_seqno = 0;
+    let mut pos = 0;
+    let ctrl_cb = ctrl.clone();
+    let stream = device
+        .build_output_stream_raw(
+            &stream_config,
+            SampleFormat::I16,
+            move |data, _info| {
+                let buffer = data.as_slice_mut::<i16>().unwrap();
+                if let Ok(mut state) = ctrl_cb.state.lock() {
+                    match &mut *state {
+                        PlaybackState::Playing { seqno, samples } => {
+                            let samples: &[i16] = &samples;
+                            if *seqno != current_seqno {
+                                current_seqno = *seqno;
+                                pos = 0;
+                            }
+                            if pos >= samples.len() {
+                                pos = 0;
+                            }
+                            //debug!("{} @ {}", *seqno, pos);
+                            if samples.len() - pos >= buffer.len() {
+                                let end = pos + buffer.len();
+                                buffer.copy_from_slice(&samples.as_ref()[pos..end]);
+                                pos = end;
+                            } else {
+                                let end = samples.len();
+                                let copy_len = end - pos;
+                                buffer[0..copy_len].copy_from_slice(&samples.as_ref()[pos..end]);
+                                for s in buffer[copy_len..].iter_mut() {
+                                    *s = 0;
+                                }
+                                pos = end;
+                            }
+                            if pos >= samples.len() {
+                                pos = 0;
+                                ctrl_cb.change_state(&mut state, PlaybackState::Ready);
+                                //debug!("Stream callback: Done");
+                            }
+                        }
+                        PlaybackState::Cancel => {
+                            pos = 0;
+                            ctrl_cb.change_state(&mut state, PlaybackState::Ready);
+                        }
+                        _ => {
+                            //debug!("Stream callback: Silence");
+                            for s in buffer {
+                                *s = 0;
+                            }
+                        }
+                    }
                 }
             },
-            Ok(_) => {
-                if let Ok(mut state) = ctrl.state.lock() {
-                    ctrl.change_state(&mut state, PlaybackState::Ready);
-                }
-                //debug!("Clip done");
-            }
+            |err| {
+                error!("Stream error: {}", err);
+            },
+        )
+        .unwrap();
+    stream.play().unwrap();
+
+    let mut guard = ctrl.get_state_guard();
+    ctrl.change_state(&mut guard, PlaybackState::Ready);
+    loop {
+        match &*guard {
+            PlaybackState::Shutdown => break,
+            _ => {}
         }
+        guard = ctrl
+            .cond
+            .wait(guard)
+            .expect("Failed to wait for state change");
     }
-    {
-        let mut guard = ctrl.get_state_guard();
-        ctrl.change_state(&mut guard, PlaybackState::Done);
-    }
+    ctrl.change_state(&mut guard, PlaybackState::Done);
+    debug!("Playback thread exited");
 }
 
 struct PlaybackFuture {
     seqno: u32,
-    control: Arc<PlaybackControl>
+    control: Arc<PlaybackControl>,
 }
-impl PlaybackFuture
-{
-    fn new(seqno: u32, control: Arc<PlaybackControl>) -> PlaybackFuture
-    {
-        PlaybackFuture{seqno, control}
+impl PlaybackFuture {
+    fn new(seqno: u32, control: Arc<PlaybackControl>) -> PlaybackFuture {
+        PlaybackFuture { seqno, control }
     }
 }
 
-impl Future for PlaybackFuture
-{
+impl Future for PlaybackFuture {
     type Output = Result<(), Error>;
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output>
-    {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let ctrl = &self.control;
-        let mut guard =  ctrl.get_state_guard();
-            
+        let mut guard = ctrl.get_state_guard();
+
         match &*guard {
             PlaybackState::Error(_) => {
                 let state = PlaybackState::Ready;
@@ -282,30 +259,23 @@ impl Future for PlaybackFuture
                 } else {
                     panic!("Wrong state");
                 }
-            },
-            PlaybackState::Playing{seqno, ..} 
-            if self.seqno == *seqno => {
-                let mut waker = ctrl.waker.lock()
-                    .expect("Failed to lock waker");
+            }
+            PlaybackState::Playing { seqno, .. } if self.seqno == *seqno => {
+                let mut waker = ctrl.waker.lock().expect("Failed to lock waker");
                 *waker = Some(cx.waker().clone());
                 //debug!("Playback future waiting for completion");
                 Poll::Pending
-            },
-            _ => {
-                Poll::Ready(Ok(()))
             }
+            _ => Poll::Ready(Ok(())),
         }
     }
-        
 }
 
-impl Drop for PlaybackFuture
-{
-    fn drop(&mut self)
-    {
+impl Drop for PlaybackFuture {
+    fn drop(&mut self) {
         let ctrl = &self.control;
-        let mut guard =  ctrl.get_state_guard();
-        if let PlaybackState::Playing{seqno, ..} =  &*guard {
+        let mut guard = ctrl.get_state_guard();
+        if let PlaybackState::Playing { seqno, .. } = &*guard {
             if self.seqno == *seqno {
                 ctrl.change_state(&mut guard, PlaybackState::Cancel);
             }
@@ -315,100 +285,106 @@ impl Drop for PlaybackFuture
 
 static NEXT_SEQ_NO: AtomicU32 = AtomicU32::new(1);
 
-impl ClipPlayer
-{
-    pub fn new(pcm_name: &str, rate: u32, channels: u8) 
-               -> Result<ClipPlayer, Error>
-    {
-        let pcm_name = CString::new(pcm_name).unwrap();
-        let pcm = PCM::open(pcm_name.as_c_str(), Direction::Playback,false)?;
-        {
-            let hw_params = HwParams::any(&pcm)?;
-            hw_params.set_rate(rate, ValueOr::Nearest)?;
-            hw_params.set_channels(u32::from(channels))?;
-            hw_params.set_format(Format::s16())?;
-            hw_params.set_access(Access::RWInterleaved)?;
-            hw_params.set_buffer_size_near(i64::from(rate))?;
-            pcm.hw_params(&hw_params)?;
-        }
-        let control = Arc::new(
-            PlaybackControl {
-                state: Mutex::new(PlaybackState::Setup),
-                cond: Condvar::new(),
-                waker: Mutex::new(None)
-            });
-        let thread_ctrl = control.clone();
-        thread::spawn(move || {
-            debug!("Started playback thread");
-            playback_thread(pcm, thread_ctrl);
-        });
-        debug!("PCM setup done");
-        Ok(ClipPlayer{
-            control
-        })
-    }
-
-    
-    pub fn start_clip(&self, clip: Arc<Vec<i16>>)
-                            -> Pin<Box<dyn Future<Output = Result<(), Error>> + Send>>
-    {
-        let seqno = NEXT_SEQ_NO.fetch_add(1, Ordering::Relaxed);
-        {
-        let mut guard = self.control.get_state_guard();
-
-        loop {
-            match &*guard {
-                PlaybackState::Setup | PlaybackState::Cancel => {
-                    guard = self.control.cond.wait(guard)
-                        .expect("Failed to wait for playback thread");
-                },
-                PlaybackState::Playing{..} => {
-                    self.control.change_state(&mut guard,
-                                              PlaybackState::Cancel);
-                },
-                PlaybackState::Ready => break,
-                PlaybackState::Error(_) => {
-                    let state = self.control.change_state(&mut guard,
-                                                          PlaybackState::Ready);
-                    if let PlaybackState::Error(err) = state {
-                        return Box::pin(future::ready(Err(err)))
-                    } else {
-                        panic!("Wrong state");
-                    }
-                },
-                PlaybackState::Shutdown | PlaybackState::Done => {
-                    return Box::pin(future::ready(Err(Error::Shutdown)))
+impl ClipPlayer {
+    pub fn new(pcm_name: &str, rate: u32, channels: u8) -> Result<ClipPlayer, Error> {
+        let host = cpal::default_host();
+        let device = if pcm_name == "default" {
+            host.default_output_device()
+                .ok_or_else(|| "No default device".to_string())?
+        } else {
+            let mut selected = None;
+            let devices = host.output_devices()?;
+            for device in devices {
+		debug!("Checking device {}", device.name()?);
+                if device.name()? == pcm_name {
+                    selected = Some(device);
+                    break;
                 }
             }
+            selected.ok_or_else(|| format!("Playback device {} not found", pcm_name))?
+        };
+        info!("Audio playback on device {}", device.name()?);
+        let stream_config = StreamConfig {
+            channels: channels.into(),
+            sample_rate: SampleRate(rate),
+            buffer_size: BufferSize::Fixed(4096),
+        };
+        let control = Arc::new(PlaybackControl {
+            state: Mutex::new(PlaybackState::Setup),
+            cond: Condvar::new(),
+            waker: Mutex::new(None),
+        });
+        let thread_ctrl = control.clone();
+        thread::spawn(|| playback_thread(device, stream_config, thread_ctrl));
+
+        Ok(ClipPlayer { control })
+    }
+
+    pub fn start_clip(
+        &self,
+        clip: Arc<Vec<i16>>,
+    ) -> Pin<Box<dyn Future<Output = Result<(), Error>> + Send>> {
+        let seqno = NEXT_SEQ_NO.fetch_add(1, Ordering::Relaxed);
+        {
+            let mut guard = self.control.get_state_guard();
+
+            loop {
+                match &*guard {
+                    PlaybackState::Setup | PlaybackState::Cancel => {
+                        guard = self
+                            .control
+                            .cond
+                            .wait(guard)
+                            .expect("Failed to wait for playback thread");
+                    }
+                    PlaybackState::Playing { .. } => {
+                        self.control.change_state(&mut guard, PlaybackState::Cancel);
+                    }
+                    PlaybackState::Ready => break,
+                    PlaybackState::Error(_) => {
+                        let state = self.control.change_state(&mut guard, PlaybackState::Ready);
+                        if let PlaybackState::Error(err) = state {
+                            return Box::pin(future::ready(Err(err)));
+                        } else {
+                            panic!("Wrong state");
+                        }
+                    }
+                    PlaybackState::Shutdown | PlaybackState::Done => {
+                        return Box::pin(future::ready(Err(Error::Shutdown)))
+                    }
+                }
+            }
+
+            self.control.change_state(
+                &mut guard,
+                PlaybackState::Playing {
+                    seqno,
+                    samples: clip,
+                },
+            );
         }
 
-        self.control.change_state(&mut guard,
-                                  PlaybackState::Playing{seqno, samples: clip});
-        
-        }
-        
         Box::pin(PlaybackFuture::new(seqno, self.control.clone()))
     }
 
-    pub fn shutdown(&self)
-    {
+    pub fn shutdown(&self) {
         let mut guard = self.control.get_state_guard();
 
         loop {
             match &*guard {
-        
-                PlaybackState::Done => {
-                    return
-                },
+                PlaybackState::Done => return,
                 PlaybackState::Shutdown => {
-                    guard = self.control.cond.wait(guard)
+                    guard = self
+                        .control
+                        .cond
+                        .wait(guard)
                         .expect("Failed to wait fo shutdown");
-                },
+                }
                 _ => {
-                    self.control.change_state(&mut guard,
-                                              PlaybackState::Shutdown);
-                },
+                    self.control
+                        .change_state(&mut guard, PlaybackState::Shutdown);
+                }
             }
-        } 
+        }
     }
 }

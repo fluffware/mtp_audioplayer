@@ -74,15 +74,38 @@ pub fn load_clips(
                 duration,
             } => {
                 let rate = f64::from(rate);
+		let ramp = 100;
                 let scale = amplitude * SAMPLE_MAX;
                 let length = (rate * duration.as_secs_f64()).round() as usize;
                 let mut samples = Vec::<i16>::with_capacity(length * usize::from(channels));
                 let fscale = frequency * std::f64::consts::TAU / rate;
                 for i in 0..length {
+		    let env;
+		    if i < ramp {
+			env = scale *  (i as f64) / (ramp as f64);
+		    } else if i > length - ramp {
+			env = scale *  ((length - i) as f64) / (ramp as f64);
+		    } else {
+			env = scale;
+		    }
+		    let s = (f64::sin((i as f64) * fscale) * env) as i16;
                     for _ in 0..channels {
                         samples.push((f64::sin((i as f64) * fscale) * scale) as i16);
                     }
                 }
+		let mut i = length;
+		if let Some(&(mut prev)) = samples.last() {
+		    loop {
+			let s = (f64::sin((i as f64) * fscale) * scale) as i16;
+			if s == 0 || (s >= 0 && prev < 0) || (s < 0 && prev >= 0) {
+			    break;
+			}
+			samples.push(s);
+			i += 1;
+			prev = s;
+		    }
+		}
+		    
 
                 clips.insert(name.clone(), Arc::new(samples));
             }
