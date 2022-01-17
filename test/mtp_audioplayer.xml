@@ -74,18 +74,18 @@
     <sequence id="AlarmRepeat">
       <repeat>
 	<repeat count="20">
-	  <play>SoundAlarm</play>
-	  <wait>5s</wait>
+	  <play>A</play>
+	  <wait>0.5s</wait>
 	</repeat>
-	<wait>6h</wait>
+	<wait>10s</wait>
       </repeat>
     </sequence>
     <sequence id="AlarmDelayed">
       <repeat>
-	<wait>5m</wait>
+	<wait>5s</wait>
 	<repeat count="20">
-	  <play>SoundAlarm</play>
-	  <wait>5s</wait>
+	  <play>C</play>
+	  <wait>0.5s</wait>
 	</repeat>
       </repeat>
     </sequence>
@@ -122,7 +122,8 @@
 	<wait>0.5s</wait>
       </repeat>
     </equals>
-    <!--<toggle tag="AlarmRestart">
+    <!--
+    <toggle tag="AlarmRestart">
       <alarm_restart/>
     </toggle>
     <equals tag="AlarmProfile" value="0">
@@ -130,30 +131,28 @@
     </equals>
     <equals tag="AlarmProfile" value="1">
       <set_profile>Operation</set_profile>
-    </equals>-->
+    </equals>
+-->
   </tags>
   <alarms>
     <filter id="AlarmsUnacked">
-      <class>Larm</class>
-      <unacked/>
+      AlarmClassName = 'Larm' AND (State = 'in')
     </filter>
-    <filter id="AlarmsRaised">
-      <class>Larm</class>
-      <raised/>
+    <filter id="AlarmsAcked">
+      AlarmClassName = 'Larm' AND (State = 'in ack')
     </filter>
     <filter id="Warnings">
-      <class>Varning</class>
-      <raised/>
+      AlarmClassName = 'Varning' AND (State = 'in' OR State = 'in ack')
     </filter>
     <profile id="Normal">
-      <while filter="AlarmUnacked" state="not_empty">
+      <while filter="AlarmsUnacked" active="any">
 	<action use="AlarmRepeat"/>
       </while>
-      <while filter="AlarmsRaised" state="not_empty">
+      <while filter="AlarmsAcked" active="any">
 	<action use="AlarmDelayed"/>
       </while>
 	
-      <when filter="Varning" event="add">
+      <when filter="Warnings" event="raised">
 	<action use="InfoOnce"/>
       </when>
     </profile>

@@ -1,0 +1,220 @@
+<?xml version="1.0"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+	   targetNamespace="http://www.elektro-kapsel.se/audioplayer/v1"
+	   xmlns="http://www.elektro-kapsel.se/audioplayer/v1"
+	   elementFormDefault="qualified">
+
+<xs:element name="pets">
+  <xs:complexType>
+    <xs:sequence minOccurs="0" maxOccurs="unbounded">
+      <xs:element name="dog" type="xs:string"/>
+      <xs:element name="cat" type="xs:string"/>
+    </xs:sequence>
+  </xs:complexType>
+</xs:element> 
+  <xs:element name="audioplayer">
+    <xs:complexType>
+      <xs:sequence>
+	<xs:element name="bind" type="xs:string">
+	</xs:element>
+	<xs:element name="playback_device">
+	   <xs:complexType>
+	     <xs:simpleContent>
+	       <xs:extension base="xs:string">
+		 <xs:attribute name="rate" type="xs:positiveInteger" use="required"/>
+		 <xs:attribute name="channels" type="xs:positiveInteger" use="required"/>
+	       </xs:extension>
+	     </xs:simpleContent>
+	   </xs:complexType>
+	</xs:element>
+	<xs:element name="clips" type="clips"/>
+	<xs:element name="actions" type="named_actions" minOccurs="1"/>
+	<xs:element name="tags" type="tags" minOccurs="1"/>
+	<xs:element name="alarms" type="alarms" minOccurs="1"/>
+      </xs:sequence>
+    </xs:complexType>
+  </xs:element>
+  
+  <xs:complexType name="clips">
+    <xs:choice maxOccurs="unbounded">
+      <xs:element name="file" maxOccurs="unbounded">
+	<xs:complexType>
+	  <xs:simpleContent>
+	    <xs:extension base="xs:string">
+	      <xs:attributeGroup ref="id_attr"/>
+	    </xs:extension>
+	  </xs:simpleContent>
+	</xs:complexType>
+      </xs:element>
+       <xs:element name="sine" maxOccurs="unbounded">
+	<xs:complexType>
+	  <xs:attributeGroup ref="id_attr"/>
+	  <xs:attribute name="amplitude" type="xs:decimal" use="required"/>
+	  <xs:attribute name="frequency" type="xs:decimal" use="required"/>
+	  <xs:attribute name="duration" type="duration" use="required"/>
+	</xs:complexType>
+      </xs:element>
+    </xs:choice>
+    <xs:attribute name="path" type="xs:string"/>
+  </xs:complexType>
+  
+  <xs:complexType name="named_actions">
+    <xs:group ref="action" maxOccurs="unbounded"/>
+  </xs:complexType>
+ 
+  <xs:complexType name="tags">
+    <xs:choice maxOccurs="unbounded">
+      <xs:element name="toggle">
+	<xs:complexType>
+	  <xs:group ref="action" maxOccurs="unbounded"/>
+	  <xs:attribute name="tag" type="xs:string" use="required"/>
+	</xs:complexType>
+      </xs:element>
+      <xs:element name="equals">
+	<xs:complexType>
+	  <xs:group ref="action" maxOccurs="unbounded"/>
+	  <xs:attribute name="tag" type="xs:string" use="required"/>
+	  <xs:attribute name="value" type="xs:integer" use="required"/>
+	</xs:complexType>
+      </xs:element>
+    </xs:choice>
+  </xs:complexType>
+  
+  <xs:complexType name="alarms">
+    <xs:sequence >
+      <xs:element name="filter" maxOccurs="unbounded">
+	<xs:complexType>
+	  <xs:simpleContent>
+	    <xs:extension base="xs:string">
+	      <xs:attributeGroup ref="id_attr"/>
+	    </xs:extension>
+	  </xs:simpleContent>
+	</xs:complexType>
+      </xs:element>
+      <xs:element name="profile" type="profile" maxOccurs="unbounded"/>
+    </xs:sequence>
+  </xs:complexType>
+
+  <xs:complexType name="profile">
+    <xs:choice maxOccurs="unbounded">
+      <xs:element name="while">
+	<xs:complexType>
+	  <xs:group ref="action" maxOccurs="unbounded"/>
+	  <xs:attribute name="filter" type="xs:string" use="required"/>
+	  <xs:attribute name="active" default="any">
+	    <xs:simpleType>
+	      <xs:restriction base="xs:string">
+		<xs:enumeration value="none"/>
+		<xs:enumeration value="any"/>
+	      </xs:restriction>
+	    </xs:simpleType>
+	  </xs:attribute>
+	</xs:complexType>
+      </xs:element>
+       <xs:element name="when">
+	<xs:complexType>
+	  <xs:group ref="action" maxOccurs="unbounded"/>
+	  <xs:attribute name="filter" type="xs:string" use="required"/>
+	  <xs:attribute name="event" default="raised">
+	    <xs:simpleType>
+	      <xs:restriction base="xs:string">
+		<xs:enumeration value="raised"/>
+		<xs:enumeration value="cleared"/>
+		<xs:enumeration value="first_raised"/>
+		<xs:enumeration value="last_cleared"/>
+	      </xs:restriction>
+	    </xs:simpleType>
+	  </xs:attribute>
+	</xs:complexType>
+      </xs:element>
+    </xs:choice>
+    <xs:attributeGroup ref="id_attr"/>
+  </xs:complexType>
+  
+  <xs:group name="action">
+    <xs:choice>
+      <xs:element name="play">
+	<xs:complexType>
+	  <xs:simpleContent>
+	    <xs:extension base="xs:string">
+	      <xs:attributeGroup ref="action_id_attr"/>
+	      <xs:attribute name="priority" type="xs:integer"/>
+	      <xs:attribute name="timeout" type="duration"/>
+	    </xs:extension>
+	  </xs:simpleContent>
+	</xs:complexType>
+      </xs:element>
+      
+      <xs:element name="wait">
+	<xs:complexType>
+	  <xs:simpleContent>
+	    <xs:extension base="duration">
+	      <xs:attributeGroup ref="action_id_attr"/>
+	    </xs:extension>
+	  </xs:simpleContent>
+	</xs:complexType>
+      </xs:element>
+      
+      <xs:element name="sequence">
+	<xs:complexType>
+	  <xs:group ref="action" maxOccurs="unbounded"/>
+	  <xs:attributeGroup ref="action_id_attr"/>
+	</xs:complexType>
+      </xs:element>
+      
+      <xs:element name="parallel">
+	<xs:complexType>
+	  <xs:group ref="action" maxOccurs="unbounded"/>
+	  <xs:attributeGroup ref="action_id_attr"/>
+	</xs:complexType>
+      </xs:element>
+
+       <xs:element name="repeat">
+	<xs:complexType>
+	  <xs:group ref="action" maxOccurs="unbounded"/>
+	  <xs:attributeGroup ref="action_id_attr"/>
+	  <xs:attribute name="count" type="xs:positiveInteger"/>
+	</xs:complexType>
+      </xs:element>
+
+      <xs:element name="action">
+	<xs:complexType>
+	  <xs:attributeGroup ref="action_id_attr"/>
+	  <xs:attribute name="use" type="xs:string"/>
+	</xs:complexType>
+      </xs:element>
+       <xs:element name="alarm_restart">
+	<xs:complexType>
+	  <xs:attributeGroup ref="action_id_attr"/>
+	</xs:complexType>
+      </xs:element>
+      
+      <xs:element name="set_profile">
+	<xs:complexType>
+	   <xs:simpleContent>
+	    <xs:extension base="xs:string">
+	      <xs:attributeGroup ref="action_id_attr"/>
+	    </xs:extension>
+	  </xs:simpleContent>
+	</xs:complexType>
+      </xs:element>
+      
+    </xs:choice>
+  </xs:group>
+  
+  <xs:attributeGroup name="id_attr">
+    <xs:attribute name="id" type="xs:string" use="required"/>
+  </xs:attributeGroup>
+  
+  <xs:attributeGroup name="action_id_attr">
+    <xs:attribute name="id" type="xs:string"/>
+  </xs:attributeGroup>
+
+  <xs:simpleType name="duration">
+    <xs:restriction base="xs:string">
+      <xs:pattern value="[0-9]+(\.[0-9]+)?[smh]"/>
+    </xs:restriction>
+  </xs:simpleType>
+</xs:schema>
+
+

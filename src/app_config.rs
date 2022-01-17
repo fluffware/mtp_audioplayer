@@ -3,15 +3,19 @@ use crate::actions::{
     parallel::ParallelAction, play::PlayAction, repeat::RepeatAction, sequence::SequenceAction,
     wait::WaitAction,
 };
+use crate::alarm_filter::BoolOp as AlarmBoolOp;
 use crate::clip_queue::ClipQueue;
-use crate::read_config::ActionType;
-use crate::read_config::TagTriggerType;
+use crate::open_pipe::alarm_data::AlarmData;
+use crate::read_config::{ActionType, AlarmTriggerType, TagTriggerType};
 use crate::{
     clip_player::ClipPlayer,
     read_config::{ClipType, PlayerConfig},
 };
+use log::debug;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::Path;
+use std::rc::Rc;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
@@ -253,24 +257,24 @@ impl TagContext {
     pub fn tag_changed(&mut self, name: &str, new_value: &str) {
         if let Some(observers) = self.tag_observers.get_mut(name) {
             let old_value = self.tag_state.get(name);
-	    let mut i = 0;
-	    while i < observers.len() {
-		let observer = &mut observers[i];
-                if observer.tag_changed(name, &old_value.and_then(|s| Some(s.as_str())), new_value) {
-		    i += 1;
-		} else {
-		    observers.remove(i);
-		}
-	    }
+            let mut i = 0;
+            while i < observers.len() {
+                let observer = &mut observers[i];
+                if observer.tag_changed(name, &old_value.and_then(|s| Some(s.as_str())), new_value)
+                {
+                    i += 1;
+                } else {
+                    observers.remove(i);
+                }
+            }
         }
-	self.tag_state.insert(name.to_string(), new_value.to_string());
+        self.tag_state
+            .insert(name.to_string(), new_value.to_string());
     }
 
-    pub fn observed_tags<'a>(&'a self) -> impl Iterator<Item=&'a String>
-    {
-	self.tag_observers.keys()
+    pub fn observed_tags<'a>(&'a self) -> impl Iterator<Item = &'a String> {
+        self.tag_observers.keys()
     }
-
 }
 
 fn bool_value(s: &str) -> bool {
@@ -292,12 +296,11 @@ struct ToggleObserver {
 }
 
 impl ToggleObserver {
-    pub fn new(action: Arc<dyn Action + Send + Sync>) -> ToggleObserver
-    {
-	ToggleObserver{
-	    action,
-	    cancel: None
-	}
+    pub fn new(action: Arc<dyn Action + Send + Sync>) -> ToggleObserver {
+        ToggleObserver {
+            action,
+            cancel: None,
+        }
     }
 }
 
@@ -305,12 +308,12 @@ impl TagObserver for ToggleObserver {
     fn tag_changed(&mut self, _name: &str, old_value: &Option<&str>, new_value: &str) -> bool {
         if let Some(old_value) = old_value {
             if bool_value(old_value) != bool_value(new_value) {
-		if let Some(cancel) = self.cancel.take() {
-		    cancel.cancel();
-		}
+                if let Some(cancel) = self.cancel.take() {
+                    cancel.cancel();
+                }
                 let action = self.action.clone();
-		let cancel = CancellationToken::new();
-		self.cancel = Some(cancel.clone());
+                let cancel = CancellationToken::new();
+                self.cancel = Some(cancel.clone());
                 tokio::spawn(async move {
                     tokio::select! {
                         _ = action.run() => {},
@@ -323,12 +326,11 @@ impl TagObserver for ToggleObserver {
     }
 }
 
-impl Drop for ToggleObserver
-{
+impl Drop for ToggleObserver {
     fn drop(&mut self) {
-	if let Some(cancel) = self.cancel.take() {
-	    cancel.cancel();
-	}
+        if let Some(cancel) = self.cancel.take() {
+            cancel.cancel();
+        }
     }
 }
 
@@ -339,13 +341,12 @@ struct WhileEqualObserver {
 }
 
 impl WhileEqualObserver {
-    pub fn new(action: Arc<dyn Action + Send + Sync>, equals: i32) -> WhileEqualObserver
-    {
-	WhileEqualObserver{
-	    action,
-	    cancel: None,
+    pub fn new(action: Arc<dyn Action + Send + Sync>, equals: i32) -> WhileEqualObserver {
+        WhileEqualObserver {
+            action,
+            cancel: None,
             equals,
-	}
+        }
     }
 }
 
@@ -354,13 +355,13 @@ impl TagObserver for WhileEqualObserver {
         if let Ok(new_value) = new_value.parse::<i32>() {
             if let Some(old_value) = old_value.and_then(|v| v.parse::<i32>().ok()) {
                 if old_value != new_value {
-		    if let Some(cancel) = self.cancel.take() {
-		        cancel.cancel();
-		    }
+                    if let Some(cancel) = self.cancel.take() {
+                        cancel.cancel();
+                    }
                     if new_value == self.equals {
                         let action = self.action.clone();
-		        let cancel = CancellationToken::new();
-		        self.cancel = Some(cancel.clone());
+                        let cancel = CancellationToken::new();
+                        self.cancel = Some(cancel.clone());
                         tokio::spawn(async move {
                             tokio::select! {
                                 _ = action.run() => {},
@@ -375,12 +376,11 @@ impl TagObserver for WhileEqualObserver {
     }
 }
 
-impl Drop for WhileEqualObserver
-{
+impl Drop for WhileEqualObserver {
     fn drop(&mut self) {
-	if let Some(cancel) = self.cancel.take() {
-	    cancel.cancel();
-	}
+        if let Some(cancel) = self.cancel.take() {
+            cancel.cancel();
+        }
     }
 }
 pub fn setup_tags(
@@ -392,15 +392,184 @@ pub fn setup_tags(
     for (name, trigger_conf) in &player_conf.tag_triggers {
         let action =
             action_conf_to_action(playback_ctxt, &trigger_conf.action, &action_ctxt.actions)?;
-	match trigger_conf.trigger {
-	    TagTriggerType::Toggle => {
-		tag_ctxt.add_observer(name.to_string(), Box::new(ToggleObserver::new(action)));
-	    },
-            TagTriggerType::Equals{value} => {
-		tag_ctxt.add_observer(name.to_string(), Box::new(WhileEqualObserver::new(action, value)));
-            },
-	    //_ => {}
-	}
+        match trigger_conf.trigger {
+            TagTriggerType::Toggle => {
+                tag_ctxt.add_observer(name.to_string(), Box::new(ToggleObserver::new(action)));
+            }
+            TagTriggerType::Equals { value } => {
+                tag_ctxt.add_observer(
+                    name.to_string(),
+                    Box::new(WhileEqualObserver::new(action, value)),
+                );
+            } //_ => {}
+        }
     }
     Ok(tag_ctxt)
+}
+
+fn find_alarm_index(alarms: &[Rc<RefCell<AlarmData>>], key: &AlarmData) -> Result<usize, usize> {
+    alarms.binary_search_by(|a| a.borrow().cmp_id(&key))
+}
+
+pub struct AlarmTrigger {
+    trigger_type: AlarmTriggerType,
+    filter: Box<AlarmBoolOp>,
+    action: Arc<dyn Action + Send + Sync>,
+    cancel: Option<CancellationToken>,
+    matching: Vec<Rc<RefCell<AlarmData>>>,
+}
+
+impl AlarmTrigger {
+    pub fn start(&mut self) {
+        if self.cancel.is_some() {
+            return;
+        }
+        let action = self.action.clone();
+        let cancel = CancellationToken::new();
+        self.cancel = Some(cancel.clone());
+        tokio::spawn(async move {
+            tokio::select! {
+                _ = action.run() => {},
+                _ = cancel.cancelled() => {},
+            }
+        });
+        debug!("Trigger {} started", self.filter.to_string());
+    }
+
+    pub fn restart(&mut self) {
+        self.stop();
+        self.start();
+    }
+
+    pub fn stop(&mut self) {
+        if let Some(cancel) = self.cancel.take() {
+            debug!("Trigger {} stopped", self.filter.to_string());
+            cancel.cancel();
+        }
+    }
+}
+
+impl Drop for AlarmTrigger {
+    fn drop(&mut self) {
+        if let Some(cancel) = self.cancel.take() {
+            cancel.cancel();
+        }
+    }
+}
+
+pub struct AlarmContext {
+    alarm_state: Vec<Rc<RefCell<AlarmData>>>,
+    alarm_triggers: Vec<AlarmTrigger>,
+}
+
+impl AlarmContext {
+    pub fn handle_notification(&mut self, new_alarm: AlarmData) -> DynResult<()> {
+        let old_state;
+        let new_state = new_alarm.state;
+        let alarm_cell;
+        match find_alarm_index(&self.alarm_state, &new_alarm) {
+            Ok(p) => {
+                old_state = self.alarm_state[p].borrow().state;
+                self.alarm_state[p].borrow_mut().state = new_alarm.state;
+                alarm_cell = &self.alarm_state[p];
+            }
+            Err(p) => {
+                old_state = 0;
+                self.alarm_state.insert(p, Rc::new(RefCell::new(new_alarm)));
+                alarm_cell = &self.alarm_state[p];
+            }
+        }
+        debug!("{} -> {}", old_state, new_state);
+        if old_state != new_state {
+            for trigger in &mut self.alarm_triggers {
+                let res = find_alarm_index(&trigger.matching, &alarm_cell.borrow());
+                if trigger.filter.evaluate(&alarm_cell.borrow()) {
+                    debug!("Filter {} evaluated to true", trigger.filter.to_string());
+                    if let Err(index) = res {
+                        trigger.matching.insert(index, alarm_cell.clone());
+                        match trigger.trigger_type {
+                            AlarmTriggerType::WhileAnyActive => {
+                                if !trigger.matching.is_empty() {
+                                    debug!("Start any");
+                                    trigger.start();
+                                }
+                            }
+                            AlarmTriggerType::WhileNoneActive => {
+                                debug!("Stop any");
+                                trigger.stop();
+                            }
+                            AlarmTriggerType::WhenRaised => {
+                                trigger.restart();
+                            }
+                            AlarmTriggerType::WhenFirstRaised => {
+                                if trigger.matching.len() == 1 {
+                                    trigger.restart();
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                } else {
+                    if let Ok(index) = res {
+                        trigger.matching.remove(index);
+                        match trigger.trigger_type {
+                            AlarmTriggerType::WhileAnyActive => {
+                                if trigger.matching.is_empty() {
+                                    trigger.stop();
+                                }
+                            }
+                            AlarmTriggerType::WhileNoneActive => {
+                                if trigger.matching.is_empty() {
+                                    trigger.start();
+                                }
+                            }
+                            AlarmTriggerType::WhenCleared => {
+                                trigger.restart();
+                            }
+                            AlarmTriggerType::WhenLastCleared => {
+                                if trigger.matching.is_empty() {
+                                    trigger.restart();
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+pub fn setup_alarms(
+    player_conf: &PlayerConfig,
+    playback_ctxt: &PlaybackContext,
+    action_ctxt: &ActionContext,
+) -> DynResult<AlarmContext> {
+    let alarm_state = Vec::new();
+    let mut alarm_triggers = Vec::new();
+
+    for (name, profile_conf) in &player_conf.alarm_profiles {
+        for trigger_conf in &profile_conf.triggers {
+            let action =
+                action_conf_to_action(playback_ctxt, &trigger_conf.action, &action_ctxt.actions)?;
+            let filter = player_conf
+                .named_alarm_filters
+                .get(&trigger_conf.filter_id)
+                .ok_or(format!("No alarm filter named {}", &trigger_conf.filter_id))?;
+            let trigger = AlarmTrigger {
+                trigger_type: trigger_conf.trigger_type,
+                filter: Box::new(filter.clone()),
+                action,
+                cancel: None,
+                matching: Vec::with_capacity(5),
+            };
+            alarm_triggers.push(trigger);
+        }
+    }
+    let alarm_ctxt = AlarmContext {
+        alarm_state,
+        alarm_triggers,
+    };
+    Ok(alarm_ctxt)
 }

@@ -9,7 +9,6 @@ function build_ws_uri(path) {
 class TagList
 {
     constructor(table_elem) {
-	console.log("Building");
 	this.table_elem = table_elem;
 	let cookie = Math.round(Math.random()*1e9).toString() + "-" + Date.now();
 	let list = this;
@@ -41,7 +40,6 @@ class TagList
     }
 
     build_list(tags) {
-	 console.log("Building");
 	let table = this.table_elem;
 	table.innerHTML ="";
 	this.update_list(tags);
@@ -49,7 +47,6 @@ class TagList
 
     update_list(tags)
     {
-	console.log(tags);
 	for (let t of tags) {
 	    let table = this.table_elem;
 	    let row = table.querySelector("tr[tag_name='"+t.Name+"']");
@@ -95,4 +92,3 @@ class TagList
     
 }
     
-console.log("tags.js");

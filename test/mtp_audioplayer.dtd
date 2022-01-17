@@ -1,0 +1,70 @@
+<!ELEMENT audioplayer (bind|playback_device|clips|actions|tags|alarms)+>
+<!ATTLIST audioplayer xmlns CDATA #FIXED "http://www.elektro-kapsel.se/audioplayer/v1">
+
+<!ELEMENT bind (#PCDATA)>
+
+<!ELEMENT playback_device (#PCDATA)>
+<!ATTLIST playback_device rate CDATA #REQUIRED>
+<!ATTLIST playback_device channels CDATA #REQUIRED>
+
+<!ELEMENT clips (file|sine)+>
+<!ATTLIST clips path CDATA #IMPLIED>
+
+<!ELEMENT file (#PCDATA)>
+<!ATTLIST file id CDATA #REQUIRED>
+
+<!ELEMENT sine EMPTY>
+<!ATTLIST sine id CDATA #REQUIRED>
+<!ATTLIST sine amplitude CDATA #REQUIRED>
+<!ATTLIST sine frequency CDATA #REQUIRED>
+<!ATTLIST sine duration CDATA #REQUIRED>
+
+<!ENTITY % actions "action | sequence | parallel | play | wait | alarm_restart | set_profile | repeat">
+
+<!ELEMENT actions (%actions;)+>
+
+<!ELEMENT action EMPTY>
+<!ATTLIST action use CDATA #REQUIRED>
+
+<!ELEMENT play (#PCDATA)>
+<!ATTLIST play id CDATA #IMPLIED>
+<!ATTLIST play timeout CDATA #IMPLIED>
+<!ATTLIST play priority CDATA #IMPLIED>
+
+<!ELEMENT wait (#PCDATA)>
+<!ATTLIST wait id CDATA #IMPLIED>
+
+<!ELEMENT sequence (%actions;)+>
+<!ATTLIST sequence id CDATA #IMPLIED>
+
+<!ELEMENT parallel (%actions;)+>
+<!ATTLIST parallel id CDATA #IMPLIED>
+
+<!ELEMENT repeat (%actions;)+>
+<!ATTLIST repeat id CDATA #IMPLIED>
+<!ATTLIST repeat count CDATA #IMPLIED>
+
+<!ELEMENT tags (toggle | equals)+>
+
+<!ELEMENT toggle (%actions;)+>
+<!ATTLIST toggle tag CDATA #REQUIRED>
+
+<!ELEMENT equals (%actions;)+>
+<!ATTLIST equals tag CDATA #REQUIRED>
+<!ATTLIST equals value CDATA #REQUIRED>
+
+<!ELEMENT alarms (filter | profile)+>
+
+<!ELEMENT filter (#PCDATA)>
+<!ATTLIST filter id CDATA #REQUIRED>
+
+<!ELEMENT profile (while | when)+>
+<!ATTLIST profile id CDATA #REQUIRED>
+
+<!ELEMENT while (%actions;)+>
+<!ATTLIST while filter CDATA #REQUIRED>
+<!ATTLIST while active (none | any) "any">
+
+<!ELEMENT when (%actions;)+>
+<!ATTLIST when filter CDATA #REQUIRED>
+<!ATTLIST when event (raised | cleared) "raised">

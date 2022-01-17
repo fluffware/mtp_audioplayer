@@ -1,5 +1,6 @@
 use log::{debug, error, info, warn};
-use mtp_audioplayer::app_config::{self, TagContext};
+use mtp_audioplayer::app_config::{self, AlarmContext, TagContext};
+use mtp_audioplayer::open_pipe::alarm_data::AlarmData;
 use mtp_audioplayer::open_pipe::connection as open_pipe;
 use mtp_audioplayer::read_config::{self, PlayerConfig};
 use std::collections::HashMap;
@@ -53,9 +54,10 @@ async fn subscribe_tags(
     }
     Ok((subscription, tag_values))
 }
-async fn subscribe_alarms(pipe: &mut open_pipe::Connection) -> Result<()> {
+async fn subscribe_alarms(pipe: &mut open_pipe::Connection) -> Result<Vec<AlarmData>> {
     debug!("Subcribing alarms");
     let _subscription = pipe.subscribe_alarms().await?;
+    let alarms;
     'next_event: loop {
         match timeout(Duration::from_secs(5), pipe.get_message()).await {
             Err(_) => {
@@ -65,6 +67,7 @@ async fn subscribe_alarms(pipe: &mut open_pipe::Connection) -> Result<()> {
                 Some(event) => match event.message {
                     MessageVariant::NotifySubscribeAlarm(params) => {
                         debug!("Subcribed alarms: {:?}", params);
+                        alarms = params.params.alarms.into_iter().map(|a| AlarmData::from(a)).collect();
                         break 'next_event;
                     }
                     MessageVariant::ErrorSubscribeAlarm(error) => return Err(error.into()),
@@ -77,9 +80,8 @@ async fn subscribe_alarms(pipe: &mut open_pipe::Connection) -> Result<()> {
             },
         }
     }
-    Ok(())
+    Ok(alarms)
 }
-
 
 async fn trig_on_tag(tag_ctxt: &mut TagContext, tag_name: &str, tag_value: &str) {
     tag_ctxt.tag_changed(tag_name, tag_value);
@@ -89,8 +91,9 @@ async fn handle_msg(
     pipe: &mut open_pipe::Connection,
     msg: &open_pipe::Message,
     tag_ctxt: &mut TagContext,
+    alarm_ctxt: &mut AlarmContext,
 ) -> Result<()> {
-    let mut set_tags = Vec::<WriteTagValue>::new();
+    let set_tags = Vec::<WriteTagValue>::new();
     match &msg.message {
         MessageVariant::NotifySubscribeTag(notify) => {
             for notify_tag in &notify.params.tags {
@@ -100,6 +103,10 @@ async fn handle_msg(
         MessageVariant::NotifySubscribeAlarm(notify) => {
             for notify_alarm in &notify.params.alarms {
                 debug!("Received alarm: {:?}", notify_alarm);
+                let alarm_data = AlarmData::from(notify_alarm.clone());
+                if let Err(e) = alarm_ctxt.handle_notification(alarm_data) {
+                    error!("Failed to handle alarm notification: {}", e);
+                }
             }
         }
         _ => {}
@@ -112,7 +119,7 @@ async fn handle_msg(
     Ok(())
 }
 
-fn read_configuration(path: &Path) -> Result<(PlayerConfig, TagContext)> {
+fn read_configuration(path: &Path) -> Result<(PlayerConfig, TagContext, AlarmContext)> {
     let reader = File::open(path)?;
     let app_conf = read_config::read_file(reader)?;
     let base_dir = Path::new(path)
@@ -122,7 +129,8 @@ fn read_configuration(path: &Path) -> Result<(PlayerConfig, TagContext)> {
     let playback_ctxt = app_config::setup_clip_playback(&app_conf, base_dir)?;
     let action_ctxt = app_config::setup_actions(&app_conf, &playback_ctxt)?;
     let tag_ctxt = app_config::setup_tags(&app_conf, &playback_ctxt, &action_ctxt)?;
-    Ok((app_conf, tag_ctxt))
+    let alarm_ctxt = app_config::setup_alarms(&app_conf, &playback_ctxt, &action_ctxt)?;
+    Ok((app_conf, tag_ctxt, alarm_ctxt))
 }
 
 #[tokio::main]
@@ -136,17 +144,18 @@ async fn main() {
         OsStr::new(DEFAULT_CONFIG_FILE).to_os_string()
     };
 
-    let (app_conf, mut tag_ctxt) = match read_configuration(Path::new(&conf_path_str)) {
-        Ok(ctxt) => ctxt,
-        Err(e) => {
-            error!(
-                "Failed to read configuration file '{}': {}",
-                conf_path_str.to_string_lossy(),
-                e
-            );
-            return;
-        }
-    };
+    let (app_conf, mut tag_ctxt, mut alarm_ctxt) =
+        match read_configuration(Path::new(&conf_path_str)) {
+            Ok(ctxt) => ctxt,
+            Err(e) => {
+                error!(
+                    "Failed to read configuration file '{}': {}",
+                    conf_path_str.to_string_lossy(),
+                    e
+                );
+                return;
+            }
+        };
 
     let mut pipe = match open_pipe::Connection::connect(&app_conf.bind).await {
         Err(err) => {
@@ -157,15 +166,15 @@ async fn main() {
     };
     let mut tag_names: Vec<String> = tag_ctxt.observed_tags().cloned().collect();
     match subscribe_tags(&mut pipe, &mut tag_names).await {
-	Err(e) => {
+        Err(e) => {
             error!("Failed to subscribe tags: {}", e);
             return;
-	},
-	Ok((_, mut values)) => {
-	    for (k,v) in values.drain() {
-		tag_ctxt.tag_changed(&k,&v);
-	    }
-	}
+        }
+        Ok((_, mut values)) => {
+            for (k, v) in values.drain() {
+                tag_ctxt.tag_changed(&k, &v);
+            }
+        }
     }
 
     if tag_names.is_empty() {
@@ -173,22 +182,20 @@ async fn main() {
         return;
     }
 
-    if let Err(e) = subscribe_alarms(&mut pipe).await {
-        error!("Failed to subscribe alarms: {}", e);
-        return;
-    }
-    /*
-        let tag_values = tag_names
-            .iter()
-            .map(|t| WriteTagValue {
-                name: t.clone(),
-                value: "FALSE".to_string(),
-            })
-            .collect::<Vec<WriteTagValue>>();
-        if let Err(e) = pipe.write_tags(&tag_values).await {
-            error!("Failed to clear tags: {}", e);
+    match subscribe_alarms(&mut pipe).await {
+        Err(e) => {
+            error!("Failed to subscribe alarms: {}", e);
+            return;
         }
-    */
+        Ok(alarms) => {
+            for alarm_data in alarms {
+                if let Err(e) = alarm_ctxt.handle_notification(alarm_data) {
+                    error!("Failed to handle alarm notification: {}", e);
+                }
+            }
+        }
+    }
+
     let mut done = false;
     while !done {
         tokio::select! {
@@ -206,7 +213,7 @@ async fn main() {
                     Some(msg) => {
                         if let Err(e) =
                             handle_msg(&mut pipe, &msg,
-                                       &mut tag_ctxt).await {
+                                       &mut tag_ctxt, &mut alarm_ctxt).await {
                                 error!("Failed to handle Open Pipe message: {}",e);
                                 return;
                             }

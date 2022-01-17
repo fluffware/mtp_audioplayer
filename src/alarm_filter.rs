@@ -1,4 +1,4 @@
-use crate::open_pipe::connection::NotifyAlarm;
+use crate::open_pipe::alarm_data::AlarmData;
 use const_str::convert_ascii_case;
 use nom::branch::alt;
 use nom::bytes::complete::tag;
@@ -120,14 +120,14 @@ impl AlarmState {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum StringCriterion {
     AlarmClassName,
     AlarmName,
 }
 
 impl StringCriterion {
-    pub fn evaluate<'a>(&self, alarm: &'a NotifyAlarm) -> &'a str {
+    pub fn evaluate<'a>(&self, alarm: &'a AlarmData) -> &'a str {
         match self {
             StringCriterion::AlarmClassName => &alarm.alarm_class_name,
             StringCriterion::AlarmName => &alarm.name,
@@ -137,12 +137,12 @@ impl StringCriterion {
     pub fn as_str<'a>(&self) -> &'a str {
         match self {
             StringCriterion::AlarmClassName => &"AlarmClassName",
-            StringCriterion::AlarmName => &"AlarmName",
+            StringCriterion::AlarmName => &"Name",
         }
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum IntCriterion {
     Id,
     InstanceId,
@@ -151,12 +151,12 @@ pub enum IntCriterion {
 }
 
 impl IntCriterion {
-    pub fn evaluate(&self, alarm: &NotifyAlarm) -> i32 {
+    pub fn evaluate(&self, alarm: &AlarmData) -> i32 {
         match self {
-            IntCriterion::Id => alarm.id.parse().unwrap_or(0),
-            IntCriterion::InstanceId => alarm.instance_id.parse().unwrap_or(0),
-            IntCriterion::Priority => alarm.priority.parse().unwrap_or(0),
-            IntCriterion::AlarmState => alarm.state.parse().unwrap_or(0),
+            IntCriterion::Id => alarm.id,
+            IntCriterion::InstanceId => alarm.instance_id,
+            IntCriterion::Priority => alarm.priority,
+            IntCriterion::AlarmState => alarm.state,
         }
     }
 
@@ -170,7 +170,7 @@ impl IntCriterion {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum BoolOp {
     Not(Box<BoolOp>),
     And(Box<BoolOp>, Box<BoolOp>),
@@ -185,7 +185,7 @@ pub enum BoolOp {
 use BoolOp::*;
 
 impl BoolOp {
-    pub fn evaluate(&self, alarm: &NotifyAlarm) -> bool {
+    pub fn evaluate(&self, alarm: &AlarmData) -> bool {
         match self {
             Not(arg) => !arg.evaluate(alarm),
             And(arg1, arg2) => arg1.evaluate(alarm) && arg2.evaluate(alarm),
@@ -227,9 +227,9 @@ impl ToString for BoolOp {
 
 #[derive(Debug)]
 pub enum FilterErrorKind {
-    InvalidCriterionName,
-    IllegalCheckOperation,
-    InvalidState,
+    InvalidCriterionName(String),
+    IllegalCheckOperation(String),
+    InvalidState(String),
     Nom(nom::error::ErrorKind),
     Error(Box<dyn std::error::Error + Send + Sync + 'static>),
 }
@@ -237,14 +237,14 @@ pub enum FilterErrorKind {
 impl Display for FilterErrorKind {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), fmt::Error> {
         match self {
-            FilterErrorKind::InvalidCriterionName => {
-                write!(f, "Name of filter criterion not recognized")
+            FilterErrorKind::InvalidCriterionName(name) => {
+                write!(f, "Name of filter criterion not recognized: {}", name)
             }
-            FilterErrorKind::IllegalCheckOperation => {
-                write!(f, "Illegal comparison operator")
+            FilterErrorKind::IllegalCheckOperation(op) => {
+                write!(f, "Illegal comparison operator: {}", op)
             }
-            FilterErrorKind::InvalidState => {
-                write!(f, "Invalid state descriptor")
+            FilterErrorKind::InvalidState(state) => {
+                write!(f, "Invalid state descriptor: {}", state)
             }
             FilterErrorKind::Nom(err) => {
                 write!(f, "{}", err.description())
@@ -343,11 +343,11 @@ fn string_criterion(input: &str) -> IResult<&str, BoolOp, FilterError> {
     ))(input)?;
     let criterion = match field {
         "AlarmClassName" => StringCriterion::AlarmClassName,
-        "AlarmName" => StringCriterion::AlarmName,
+        "Name" => StringCriterion::AlarmName,
         _ => {
             return Err(nom::Err::Error(FilterError {
                 input,
-                kind: FilterErrorKind::InvalidCriterionName,
+                kind: FilterErrorKind::InvalidCriterionName(field.to_string()),
             }))
         }
     };
@@ -359,7 +359,7 @@ fn string_criterion(input: &str) -> IResult<&str, BoolOp, FilterError> {
             _ => {
                 return Err(nom::Err::Error(FilterError {
                     input,
-                    kind: FilterErrorKind::IllegalCheckOperation,
+                    kind: FilterErrorKind::IllegalCheckOperation(op.to_string()),
                 }))
             }
         },
@@ -387,7 +387,7 @@ fn int_criterion(input: &str) -> IResult<&str, BoolOp, FilterError> {
         _ => {
             return Err(nom::Err::Error(FilterError {
                 input,
-                kind: FilterErrorKind::InvalidCriterionName,
+                kind: FilterErrorKind::InvalidCriterionName(field.to_string()),
             }))
         }
     };
@@ -404,7 +404,7 @@ fn int_criterion(input: &str) -> IResult<&str, BoolOp, FilterError> {
             _ => {
                 return Err(nom::Err::Error(FilterError {
                     input,
-                    kind: FilterErrorKind::IllegalCheckOperation,
+                    kind: FilterErrorKind::IllegalCheckOperation(op.to_string()),
                 }))
             }
         },
@@ -432,7 +432,7 @@ fn state_criterion(input: &str) -> IResult<&str, BoolOp, FilterError> {
         match op {
             "=" => BoolOp::StateEqual(criterion, value),
             "!=" => BoolOp::Not(Box::new(BoolOp::StateEqual(criterion, value))),
-            _ => return build_error!(input, IllegalCheckOperation),
+            _ => return build_error!(input, IllegalCheckOperation(op.to_string())),
         },
     ))
 }
@@ -527,18 +527,22 @@ fn parse_and(input: &str) -> IResult<&str, BoolOp, FilterError> {
     ))
 }
 
-pub fn parse_filter(input: &str) -> IResult<&str, BoolOp, FilterError> {
-    terminated(parse_or, eof)(input)
+pub fn parse_filter<'a>(input: &'a str) -> Result<BoolOp, FilterError<'a>> {
+    match terminated(parse_or, eof)(input) {
+        Ok((_, op)) => Ok(op),
+        Err(nom::Err::Error(e)) | Err(nom::Err::Failure(e)) => Err(e),
+        Err(_) => unreachable!(),
+    }
 }
 
 #[test]
 fn test_criterion_parser() {
     assert_eq!(
-        string_criterion("AlarmName!='djkss'")
+        string_criterion("Name!='djkss'")
             .unwrap()
             .1
             .to_string(),
-        "NOT (AlarmName = 'djkss')"
+        "NOT (Name = 'djkss')"
     );
     assert_eq!(
         string_criterion("AlarmClassName = 'djkss'")
@@ -578,28 +582,24 @@ fn test_filter_parser() {
     assert_eq!(
         parse_filter("AlarmClassName = 'adjk' AND Priority < 8")
             .unwrap()
-            .1
             .to_string(),
         "(AlarmClassName = 'adjk') AND (Priority < 8)"
     );
     assert_eq!(
         parse_filter("AlarmClassName = 'ad' AND State = 8 OR State = 5")
             .unwrap()
-            .1
             .to_string(),
         "((AlarmClassName = 'ad') AND (State = 'Removed')) OR (State = 'RaisedAcknowledged')"
     );
     assert_eq!(
         parse_filter("AlarmClassName = 'ad' AND (State = 8 OR State = 'norMAL')")
             .unwrap()
-            .1
             .to_string(),
         "(AlarmClassName = 'ad') AND ((State = 'Removed') OR (State = 'Normal'))"
     );
     assert_eq!(
         parse_filter("AlarmClassName = 'ad' OR NOT State = 'RaisedClearedAcknowledged' AND State = 'RaisedAcknowledgedCleared'")
             .unwrap()
-            .1
             .to_string(),
         "(AlarmClassName = 'ad') OR ((NOT (State = 'RaisedClearedAcknowledged')) AND (State = 'RaisedAcknowledgedCleared'))"
     );
@@ -652,17 +652,47 @@ fn test_alarm_state() {
 #[test]
 fn test_filter_parser_failure() {
     let res = parse_filter("AlarmClassName = 'ad' OR ");
-    if let Err(nom::Err::Error(FilterError{input: " OR ", kind: FilterErrorKind::Nom(Eof)})) = res {
-	/* Nop */
+    if let Err(FilterError {
+        input: " OR ",
+        kind: FilterErrorKind::Nom(Eof),
+    }) = res
+    {
+        /* Nop */
     } else {
-	panic!("Unexpected result: {:?}", res);
-    }
-    
-    let res = parse_filter("AlarmClassName + 8");
-    if let Err(nom::Err::Error(FilterError{input: "+ 8", kind: FilterErrorKind::Nom(Tag)})) = res {
-	/* Nop */
-    } else {
-	panic!("Unexpected result: {:?}", res);
+        panic!("Unexpected result: {:?}", res);
     }
 
+    let res = parse_filter("AlarmClassName + 8");
+    if let Err(FilterError {
+        input: "+ 8",
+        kind: FilterErrorKind::Nom(Tag),
+    }) = res
+    {
+        /* Nop */
+    } else {
+        panic!("Unexpected result: {:?}", res);
+    }
+}
+
+#[test]
+fn test_filter_evaluate()
+{
+    let alarm_data = NotifyAlarm {
+	name: "Foo".to_string(),
+	id: "0".to_string(),
+	alarm_class_name: "Warning".to_string(),
+	alarm_class_symbol: "W".to_string(),
+	event_text: "This is a warning".to_string(),
+	instance_id: "52".to_string(),
+	priority: "7".to_string(),
+	state: "1".to_string(),
+	state_text:"Incoming".to_string(),
+	state_machine: "7".to_string(),
+	modification_time: "019-01-30 11:25:39.9780320".to_string(),
+    };
+	
+    let filter_text = "Name='Foo' AND ID=0 AND InstanceID=52 AND AlarmClassName ='Warning' AND Priority=7 AND State=1";
+    let filter = parse_filter(filter_text).unwrap();
+    assert_eq!(filter.evaluate(&alarm_data), true);
+	
 }

@@ -106,7 +106,7 @@ impl PlaybackControl
                     -> PlaybackState
     {
         let mut state = state;
-        debug!("State changed: {}", state);
+        //debug!("State changed: {}", state);
         mem::swap(guard.deref_mut(), &mut state);
 
         self.cond.notify_all();
@@ -143,7 +143,7 @@ fn play_sample(pcm: &PCM, ctrl: &Arc<PlaybackControl>) -> Result<(), Error>
         
     }
     let mut pos: usize = 0;
-    debug!("PCM state: {:?}", pcm.state());
+    //debug!("PCM state: {:?}", pcm.state());
     pcm.drop()?;
     pcm.prepare()?;
     loop {
@@ -153,7 +153,7 @@ fn play_sample(pcm: &PCM, ctrl: &Arc<PlaybackControl>) -> Result<(), Error>
                 
                 let s = &samples[pos..];
                 if s.is_empty() {break}
-                debug!("Writing {}", s.len());
+                //debug!("Writing {}", s.len());
                 pcm.io_i16()?.writei(s)
             } else {
                 // Playback was canceled
@@ -165,7 +165,7 @@ fn play_sample(pcm: &PCM, ctrl: &Arc<PlaybackControl>) -> Result<(), Error>
             Err(e) => {
                 match e.errno() {
                     Errno::EAGAIN => {
-                        debug!("Wait");
+                        //debug!("Wait");
                         let state = ctrl.get_state_guard();
                         let _state = ctrl.cond.wait_timeout_while(
                             state,
@@ -180,7 +180,7 @@ fn play_sample(pcm: &PCM, ctrl: &Arc<PlaybackControl>) -> Result<(), Error>
                 }
             },
             Ok(w) => { 
-                debug!("Wrote: {}",w);
+                //debug!("Wrote: {}",w);
                 pos += w * usize::try_from(channels).unwrap();
             }
         }
@@ -188,7 +188,7 @@ fn play_sample(pcm: &PCM, ctrl: &Arc<PlaybackControl>) -> Result<(), Error>
     }
     
     let state = ctrl.get_state_guard();
-    debug!("Wait for clip to finish");
+    //debug!("Wait for clip to finish");
     let delay = u64::try_from(pcm.delay()?).unwrap();
     let left = 1_000_000_000u64 * delay / frame_rate;
     let (_,res) = ctrl.cond.wait_timeout_while(
@@ -199,7 +199,7 @@ fn play_sample(pcm: &PCM, ctrl: &Arc<PlaybackControl>) -> Result<(), Error>
         }).expect("Failed to wait for clip completion");
         
     if res.timed_out() {
-        debug!("Playback finished");
+        //debug!("Playback finished");
         pcm.drain()?;
     } else {
         debug!("Playback canceled");
@@ -243,7 +243,7 @@ fn playback_thread(pcm: PCM, ctrl: Arc<PlaybackControl>)
                 if let Ok(mut state) = ctrl.state.lock() {
                     ctrl.change_state(&mut state, PlaybackState::Ready);
                 }
-                debug!("Clip done");
+                //debug!("Clip done");
             }
         }
     }
@@ -288,7 +288,7 @@ impl Future for PlaybackFuture
                 let mut waker = ctrl.waker.lock()
                     .expect("Failed to lock waker");
                 *waker = Some(cx.waker().clone());
-                debug!("Playback future waiting for completion");
+                //debug!("Playback future waiting for completion");
                 Poll::Pending
             },
             _ => {

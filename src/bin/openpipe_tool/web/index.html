@@ -1,20 +1,64 @@
 <!DOCTYPE HTML PUBLIC "-//IETF//DTD HTML//EN">
 <html>
-  <head>
-    <meta charset="UTF-8">
-    <title>Tags</title>
-    <script>
-      var tags = [];
-    </script>
-    <script src="tags.js"></script>
-  </head>
-  
-  <body onload="let list=new TagList(document.getElementById('tag_list')); list.build_list(tags); list.update_list(tags)">
-    
+<head>
+  <meta charset="UTF-8">
+  <title>Tags</title>
+  <script>
+    var tags = [];
+    var alarms = [{
+    Name: "Alarm name",
+    ID:3, InstanceID:1, StateMachine:"7",StateText:"R",
+    AlarmClassName:"Alarm",AlarmClassSymbol:"A",
+    EventText:"There is an error",
+    Priority: "8",
+    State:5},
+    {
+    Name: "Larm",
+    ID: 1,
+    InstanceID:19,
+    State:0,
+    StateMachine: "7",
+    StateText: "Normal",
+    AlarmClassName: "Larm",
+    AlarmClassSymbol: "!",
+    EventText: "Nu är det larm",
+    Priority:2},  
+    {
+    Name: "Larm 2",
+    ID: 1,
+    InstanceID:20,
+    State:0,
+    StateMachine: "7",
+    StateText: "Normal",
+    AlarmClassName: "Larm",
+    AlarmClassSymbol: "!",
+    EventText: "Nu är det larm igen",
+    Priority:2},];
+</script>
+  <script src="tags.js"></script>
+  <script src="alarms.js"></script>
+</head>
+
+<body onload="let tag_list=new TagList(document.getElementById('tag_list')); tag_list.build_list(tags); tag_list.update_list(tags); let alarm_list=new AlarmList(document.getElementById('alarm_list')); alarm_list.build_list(alarms); tag_list.update_list(tags); ">
+
+  <h1>Tags</h1>
   <table id="tag_list">
-    <tr id="Tag">
-      <td><span class"tag_name">Name</span>
-      <td><input class"tag_value" value="0" type="number">
+    
+  </table>
+  <h1>Alarms</h1>
+  <table id="alarm_list">
+    <tr>
+      <th>ID</th>
+      <th>InstanceID</th>
+      <th>Name</th>
+      <th>AlarmClassName</th>
+      <th>AlarmClassSymbol</th>
+      <th>StateText</th>
+      <th>StateMachine</th>  
+      <th>EventText</th>
+      <th>Priotity</th>
+      <th>State</th>
     </tr>
-  </body>
+  </table>
+</body>
 </html>

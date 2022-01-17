@@ -6,12 +6,14 @@ use tokio::io::BufReader;
 use tokio::sync::mpsc::{self, Receiver, Sender};
 
 use std::future::Future;
+use std::fs::{remove_file, create_dir_all};
 
 use std::path::Path;
 use serde::{Serialize,Deserialize};
 use serde_json;
 use std::process;
-use log::{debug,error};
+use log::{debug,error,warn};
+use tokio::pin;
 
 pub type Result<T> = 
     std::result::Result<T, Box<dyn std::error::Error + Send + Sync + 'static>>;
@@ -421,18 +423,33 @@ impl Connection {
     
 }
 
- pub async fn listen<P, H, F>(path: P, handler: H) 
+ pub async fn listen<P, H, F, S>(path: P, handler: H, shutdown: S) 
 			-> std::io::Result<()>
 where H: Fn(Connection) -> F,
       F: Future<Output = ()> + Send + 'static,
-      P: AsRef<Path>
+      P: AsRef<Path>,
+      S: Future<Output = ()> + Send + 'static,
 {
-     let listener = UnixListener::bind(path)?;
-     loop {
-         let (stream, _addr) = listener.accept().await?;
-	 let conn = Connection::from_stream(stream);
-	 tokio::spawn(handler(conn));
+     if let Some(parent) = path.as_ref().parent() {
+	 create_dir_all(parent)?;
      }
+     let listener = UnixListener::bind(path.as_ref())?;
+     pin!(shutdown);
+     loop {
+	 tokio::select! {
+             res = listener.accept() => {
+		 let (stream, _addr) = res?;
+		 let conn = Connection::from_stream(stream);
+		 tokio::spawn(handler(conn));
+	     },
+	     _ = (&mut shutdown) => break
+	 }
+     }
+
+     if let Err(e) = remove_file(path.as_ref()) {
+	 warn!("Failed to delete named pipe {}: {}", path.as_ref().to_string_lossy(), e);
+     }
+     Ok(())
  }
 
 #[test]
