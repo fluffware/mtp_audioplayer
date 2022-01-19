@@ -90,21 +90,9 @@ pub fn load_clips(
 		    }
 		    let s = (f64::sin((i as f64) * fscale) * env) as i16;
                     for _ in 0..channels {
-                        samples.push((f64::sin((i as f64) * fscale) * scale) as i16);
+                        samples.push(s);
                     }
                 }
-		let mut i = length;
-		if let Some(&(mut prev)) = samples.last() {
-		    loop {
-			let s = (f64::sin((i as f64) * fscale) * scale) as i16;
-			if s == 0 || (s >= 0 && prev < 0) || (s < 0 && prev >= 0) {
-			    break;
-			}
-			samples.push(s);
-			i += 1;
-			prev = s;
-		    }
-		}
 		    
 
                 clips.insert(name.clone(), Arc::new(samples));
