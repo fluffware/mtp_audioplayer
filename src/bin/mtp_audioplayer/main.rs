@@ -33,7 +33,7 @@ async fn subscribe_tags(
                 return Err("No reply for tag subscription".to_string().into());
             }
             Ok(res) => match res {
-                Some(event) => {
+                Ok(event) => {
                     if let MessageVariant::NotifySubscribeTag(params) = event.message {
                         for tag in params.params.tags {
                             if tag.error.error_code == 0 {
@@ -45,9 +45,8 @@ async fn subscribe_tags(
                         break 'next_event;
                     }
                 }
-                None => {
-                    error!("Message EOF");
-                    return Err("Message EOF".to_string().into());
+                Err(e) => {
+		    return Err(e.into())
                 }
             },
         }
@@ -64,7 +63,7 @@ async fn subscribe_alarms(pipe: &mut open_pipe::Connection) -> Result<Vec<AlarmD
                 return Err("No reply for alarm subscription".to_string().into());
             }
             Ok(res) => match res {
-                Some(event) => match event.message {
+                Ok(event) => match event.message {
                     MessageVariant::NotifySubscribeAlarm(params) => {
                         debug!("Subcribed alarms: {:?}", params);
                         alarms = params.params.alarms.into_iter().map(|a| AlarmData::from(a)).collect();
@@ -73,9 +72,8 @@ async fn subscribe_alarms(pipe: &mut open_pipe::Connection) -> Result<Vec<AlarmD
                     MessageVariant::ErrorSubscribeAlarm(error) => return Err(error.into()),
                     _ => {}
                 },
-                None => {
-                    error!("Message EOF");
-                    return Err("Message EOF".to_string().into());
+                Err(e) => {
+                    return Err(e.into());
                 }
             },
         }
@@ -207,10 +205,10 @@ async fn main() {
             },
             res = pipe.get_message() => {
                 match res {
-                    None => {
+                    Err(_) => {
                         done = true
                     },
-                    Some(msg) => {
+                    Ok(msg) => {
                         if let Err(e) =
                             handle_msg(&mut pipe, &msg,
                                        &mut tag_ctxt, &mut alarm_ctxt).await {

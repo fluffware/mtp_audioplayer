@@ -35,7 +35,7 @@ async fn open_pipe_handler(
         tokio::select! {
             res = conn.get_message() => {
                 match res {
-                    Some(msg) => {
+                    Ok(msg) => {
                         let reply = match msg.message {
                             MessageVariant::SubscribeTag(_) |
                             MessageVariant::UnsubscribeTag |
@@ -62,7 +62,7 @@ async fn open_pipe_handler(
                             }
                         }
                     },
-                    None => break
+                    Err(_) => break
                 }
             },
             res = rx.recv() => {

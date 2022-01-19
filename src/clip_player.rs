@@ -156,67 +156,80 @@ impl PlaybackControl {
         }
     }
 }
+fn generate_samples(ctrl: &PlaybackControl, buffer: &mut [i16], current_seqno: &mut u32, pos: &mut usize) {
+   
+    if let Ok(mut state) = ctrl.state.lock() {
+        match &mut *state {
+            PlaybackState::Playing { seqno, samples } => {
+                let samples: &[i16] = &samples;
+                if *seqno != *current_seqno {
+                    *current_seqno = *seqno;
+                    *pos = 0;
+                }
+                if *pos >= samples.len() {
+                    *pos = 0;
+                }
+                //debug!("{} @ {}", *seqno, pos);
+                if samples.len() - *pos >= buffer.len() {
+                                let end = *pos + buffer.len();
+                    buffer.copy_from_slice(&samples.as_ref()[*pos..end]);
+                    *pos = end;
+                            } else {
+                    let end = samples.len();
+                    let copy_len = end - *pos;
+                    buffer[0..copy_len].copy_from_slice(&samples.as_ref()[*pos..end]);
+                    for s in buffer[copy_len..].iter_mut() {
+                        *s = 0;
+                    }
+                    *pos = end;
+                }
+                if *pos >= samples.len() {
+                    *pos = 0;
+                    ctrl.change_state(&mut state, PlaybackState::Ready);
+                    //debug!("Stream callback: Done");
+                }
+            }
+            PlaybackState::Cancel => {
+                *pos = 0;
+                ctrl.change_state(&mut state, PlaybackState::Ready);
+            }
+            _ => {
+                            //debug!("Stream callback: Silence");
+                for s in buffer {
+                                *s = 0;
+                }
+            }
+        }
+    }
+}
 
 fn playback_thread(device: Device, stream_config: StreamConfig, ctrl: Arc<PlaybackControl>) {
     let mut current_seqno = 0;
     let mut pos = 0;
     let ctrl_cb = ctrl.clone();
-    let stream = device
+    let stream = match device
         .build_output_stream_raw(
             &stream_config,
             SampleFormat::I16,
             move |data, _info| {
-                let buffer = data.as_slice_mut::<i16>().unwrap();
-                if let Ok(mut state) = ctrl_cb.state.lock() {
-                    match &mut *state {
-                        PlaybackState::Playing { seqno, samples } => {
-                            let samples: &[i16] = &samples;
-                            if *seqno != current_seqno {
-                                current_seqno = *seqno;
-                                pos = 0;
-                            }
-                            if pos >= samples.len() {
-                                pos = 0;
-                            }
-                            //debug!("{} @ {}", *seqno, pos);
-                            if samples.len() - pos >= buffer.len() {
-                                let end = pos + buffer.len();
-                                buffer.copy_from_slice(&samples.as_ref()[pos..end]);
-                                pos = end;
-                            } else {
-                                let end = samples.len();
-                                let copy_len = end - pos;
-                                buffer[0..copy_len].copy_from_slice(&samples.as_ref()[pos..end]);
-                                for s in buffer[copy_len..].iter_mut() {
-                                    *s = 0;
-                                }
-                                pos = end;
-                            }
-                            if pos >= samples.len() {
-                                pos = 0;
-                                ctrl_cb.change_state(&mut state, PlaybackState::Ready);
-                                //debug!("Stream callback: Done");
-                            }
-                        }
-                        PlaybackState::Cancel => {
-                            pos = 0;
-                            ctrl_cb.change_state(&mut state, PlaybackState::Ready);
-                        }
-                        _ => {
-                            //debug!("Stream callback: Silence");
-                            for s in buffer {
-                                *s = 0;
-                            }
-                        }
-                    }
-                }
+		let buffer = data.as_slice_mut::<i16>().unwrap();
+                generate_samples(ctrl_cb.as_ref(), buffer, &mut current_seqno, &mut pos);
             },
             |err| {
                 error!("Stream error: {}", err);
             },
-        )
-        .unwrap();
-    stream.play().unwrap();
+        ) {
+	    Ok(s) => s,
+	    Err(e) => {
+		error!("Failed to initiate audio playback: e");
+		return;
+	    }
+	    
+	};
+    if let Err(e) = stream.play() {
+	error!("Failed to start audio playback: e");
+	return;
+    }
 
     let mut guard = ctrl.get_state_guard();
     ctrl.change_state(&mut guard, PlaybackState::Ready);
@@ -295,7 +308,7 @@ impl ClipPlayer {
             let mut selected = None;
             let devices = host.output_devices()?;
             for device in devices {
-		debug!("Checking device {}", device.name()?);
+                debug!("Checking device {}", device.name()?);
                 if device.name()? == pcm_name {
                     selected = Some(device);
                     break;
