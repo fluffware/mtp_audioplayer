@@ -31,6 +31,7 @@ pub enum Error {
     Name(cpal::DeviceNameError),
     BuildStream(cpal::BuildStreamError),
     PlayStream(cpal::PlayStreamError),
+    SupportedConfig(cpal::SupportedStreamConfigsError),
     ClipPlayer(String),
     Shutdown,
 }
@@ -55,6 +56,12 @@ impl From<cpal::BuildStreamError> for Error {
     }
 }
 
+impl From<cpal::SupportedStreamConfigsError> for Error {
+    fn from(err: cpal::SupportedStreamConfigsError) -> Error {
+        Error::SupportedConfig(err)
+    }
+}
+
 impl From<cpal::PlayStreamError> for Error {
     fn from(err: cpal::PlayStreamError) -> Error {
         Error::PlayStream(err)
@@ -75,6 +82,7 @@ impl std::fmt::Display for Error {
             Error::BuildStream(e) => e.fmt(f),
             Error::PlayStream(e) => e.fmt(f),
             Error::ClipPlayer(e) => e.fmt(f),
+            Error::SupportedConfig(e) => e.fmt(f),
             Error::Shutdown => {
                 write!(f, "Playback thread shutdown")
             }
@@ -156,8 +164,12 @@ impl PlaybackControl {
         }
     }
 }
-fn generate_samples(ctrl: &PlaybackControl, buffer: &mut [i16], current_seqno: &mut u32, pos: &mut usize) {
-   
+fn generate_samples(
+    ctrl: &PlaybackControl,
+    buffer: &mut [i16],
+    current_seqno: &mut u32,
+    pos: &mut usize,
+) {
     if let Ok(mut state) = ctrl.state.lock() {
         match &mut *state {
             PlaybackState::Playing { seqno, samples } => {
@@ -171,10 +183,10 @@ fn generate_samples(ctrl: &PlaybackControl, buffer: &mut [i16], current_seqno: &
                 }
                 //debug!("{} @ {}", *seqno, pos);
                 if samples.len() - *pos >= buffer.len() {
-                                let end = *pos + buffer.len();
+                    let end = *pos + buffer.len();
                     buffer.copy_from_slice(&samples.as_ref()[*pos..end]);
                     *pos = end;
-                            } else {
+                } else {
                     let end = samples.len();
                     let copy_len = end - *pos;
                     buffer[0..copy_len].copy_from_slice(&samples.as_ref()[*pos..end]);
@@ -194,9 +206,9 @@ fn generate_samples(ctrl: &PlaybackControl, buffer: &mut [i16], current_seqno: &
                 ctrl.change_state(&mut state, PlaybackState::Ready);
             }
             _ => {
-                            //debug!("Stream callback: Silence");
+                //debug!("Stream callback: Silence");
                 for s in buffer {
-                                *s = 0;
+                    *s = 0;
                 }
             }
         }
@@ -207,28 +219,26 @@ fn playback_thread(device: Device, stream_config: StreamConfig, ctrl: Arc<Playba
     let mut current_seqno = 0;
     let mut pos = 0;
     let ctrl_cb = ctrl.clone();
-    let stream = match device
-        .build_output_stream_raw(
-            &stream_config,
-            SampleFormat::I16,
-            move |data, _info| {
-		let buffer = data.as_slice_mut::<i16>().unwrap();
-                generate_samples(ctrl_cb.as_ref(), buffer, &mut current_seqno, &mut pos);
-            },
-            |err| {
-                error!("Stream error: {}", err);
-            },
-        ) {
-	    Ok(s) => s,
-	    Err(e) => {
-		error!("Failed to initiate audio playback: e");
-		return;
-	    }
-	    
-	};
+    let stream = match device.build_output_stream_raw(
+        &stream_config,
+        SampleFormat::I16,
+        move |data, _info| {
+            let buffer = data.as_slice_mut::<i16>().unwrap();
+            generate_samples(ctrl_cb.as_ref(), buffer, &mut current_seqno, &mut pos);
+        },
+        |err| {
+            error!("Stream error: {}", err);
+        },
+    ) {
+        Ok(s) => s,
+        Err(e) => {
+            error!("Failed to initiate audio playback: {}", e);
+            return;
+        }
+    };
     if let Err(e) = stream.play() {
-	error!("Failed to start audio playback: e");
-	return;
+        error!("Failed to start audio playback: e");
+        return;
     }
 
     let mut guard = ctrl.get_state_guard();
@@ -317,6 +327,22 @@ impl ClipPlayer {
             selected.ok_or_else(|| format!("Playback device {} not found", pcm_name))?
         };
         info!("Audio playback on device {}", device.name()?);
+        for host in cpal::available_hosts() {
+            let host = cpal::host_from_id(host).unwrap();
+            debug!("Host {:?}", host.id());
+
+            for device in host.devices().unwrap() {
+                for conf in device.supported_output_configs()? {
+                    debug!(
+                        "Config: {}ch, {}-{}samples/s {:?}",
+                        conf.channels(),
+                        conf.min_sample_rate().0,
+                        conf.max_sample_rate().0,
+                        conf.sample_format()
+                    );
+                }
+            }
+        }
         let stream_config = StreamConfig {
             channels: channels.into(),
             sample_rate: SampleRate(rate),

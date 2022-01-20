@@ -31,3 +31,6 @@ num_enum="0.5"
 const-str="0.3"
 paste="1.0"
 
+[target.'cfg(windows)'.dependencies]
+winapi="0.3"
+

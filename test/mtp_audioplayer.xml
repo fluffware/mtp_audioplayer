@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <audioplayer xmlns="http://www.elektro-kapsel.se/audioplayer/v1">
   <bind>/tmp/siemens/automation/HmiRunTime</bind>
-  <playback_device rate="44100" channels="2">default</playback_device>
+  <playback_device rate="44100" channels="2">defau</playback_device>
   <clips path="DTMF"> 
     <file id="SoundAlarm">0.wav</file>
     <file id="SoundInfo">1.wav</file>
