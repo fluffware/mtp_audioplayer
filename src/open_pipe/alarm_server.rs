@@ -84,6 +84,7 @@ impl AlarmServer {
             client_cookie: subscr.cookie.clone(),
         };
 	self.subscriptions.insert(cookie.to_string(), Arc::new(Mutex::new(subscr)));
+	debug!("Added subscriber {}", cookie);
         msg
     }
 

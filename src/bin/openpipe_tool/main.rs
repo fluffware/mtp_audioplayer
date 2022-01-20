@@ -1,7 +1,9 @@
+use clap::{App, Arg};
 use futures::stream::StreamExt;
 use futures::FutureExt;
 use futures::SinkExt;
-use log::{debug, error, info};
+use log::{debug, error, info, warn};
+use mtp_audioplayer::open_pipe::alarm_data::AlarmData;
 use mtp_audioplayer::open_pipe::{
     alarm_server::AlarmServer,
     connection::{self, Connection, MessageVariant},
@@ -12,6 +14,7 @@ use std::sync::{Arc, Mutex, Weak};
 use tokio::pin;
 use tokio::signal;
 use tokio::sync::mpsc::UnboundedSender;
+use tokio::time::{timeout, Duration};
 use tokio_util::sync::CancellationToken;
 use warp::ws::Message as WsMessage;
 use warp::Filter;
@@ -46,6 +49,7 @@ async fn open_pipe_handler(
                             },
                             MessageVariant::SubscribeAlarm(_) |
                             MessageVariant::UnsubscribeAlarm |
+                            MessageVariant::NotifySubscribeAlarm(_) |
                             MessageVariant::ReadAlarm(_) => {
                                 let mut alarm_server = alarm_server.lock().unwrap();
                                 alarm_server.handle_message(msg, &notify_fn_weak)
@@ -122,15 +126,110 @@ fn alarm_web_handler(
     }
 }
 
+/*
+async fn subscribe_tags(
+    pipe: &mut Connection,
+    tag_names: &mut Vec<String>,
+) -> Result<(String, HashMap<String, String>)> {
+    let mut tag_values = HashMap::<String, String>::new();
+
+    let value_tags: Vec<&str> = tag_names.iter().map(|c| c.as_str()).collect();
+    debug!("Subcribing: {:?}", value_tags);
+    let subscription = pipe.subscribe_tags(&value_tags).await?;
+
+    'next_event: loop {
+        match timeout(Duration::from_secs(1), pipe.get_message()).await {
+            Err(_) => {
+                return Err("No reply for tag subscription".to_string().into());
+            }
+            Ok(res) => match res {
+                Ok(event) => {
+                    if let MessageVariant::NotifySubscribeTag(params) = event.message {
+                        for tag in params.params.tags {
+                            if tag.error.error_code == 0 {
+                                tag_values.insert(tag.data.name, tag.data.value);
+                            } else {
+                                warn!("Failed to subscribe to {}", tag.data.name);
+                            }
+                        }
+                        break 'next_event;
+                    }
+                }
+                Err(e) => return Err(e.into()),
+            },
+        }
+    }
+    Ok((subscription, tag_values))
+}*/
+
+async fn subscribe_alarms(pipe: &mut Connection) -> DynResult<Vec<AlarmData>> {
+    debug!("Subcribing alarms");
+    let _subscription = pipe.subscribe_alarms().await?;
+    let alarms;
+    'next_event: loop {
+        match timeout(Duration::from_secs(5), pipe.get_message()).await {
+            Err(_) => {
+                return Err("No reply for alarm subscription".to_string().into());
+            }
+            Ok(res) => match res {
+                Ok(event) => match event.message {
+                    MessageVariant::NotifySubscribeAlarm(params) => {
+                        debug!("Subcribed alarms: {:?}", params);
+                        alarms = params
+                            .params
+                            .alarms
+                            .into_iter()
+                            .map(|a| AlarmData::from(a))
+                            .collect();
+                        break 'next_event;
+                    }
+                    MessageVariant::ErrorSubscribeAlarm(error) => return Err(error.into()),
+                    _ => {}
+                },
+                Err(e) => {
+                    return Err(e.into());
+                }
+            },
+        }
+    }
+    Ok(alarms)
+}
+
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt::init();
+    let app_args = App::new("Open Pipe tool")
+        .version("0.1")
+        .about("Test tool for Open Pipe protocol")
+        .arg(Arg::with_name("client").long("client"))
+        .arg(
+            Arg::with_name("http-port")
+                .long("http-port")
+                .takes_value(true)
+                .default_value("9229"),
+        );
+
+    let args = app_args.get_matches();
 
     let shutdown = CancellationToken::new();
     let tag_server = Arc::new(Mutex::new(TagServer::new(true)));
     let alarm_server = Arc::new(Mutex::new(AlarmServer::new()));
     let tag_server_web = tag_server.clone();
     let alarm_server_web = alarm_server.clone();
+    let http_port = match args.value_of("http-port") {
+        Some(s) => match s.parse::<u16>() {
+            Ok(port) => port,
+            Err(_) => {
+                error!("Invalid value for HTTP port");
+                return;
+            }
+        },
+        None => {
+            error!("No value for HTTP port");
+            return;
+        }
+    };
+
     let tags = warp::path("tags")
         // The `ws()` filter will prepare the Websocket handshake.
         .and(warp::ws())
@@ -232,7 +331,7 @@ async fn main() {
     let shutdown_web = shutdown.clone();
     let mut web_server = tokio::spawn(
         web_server
-            .bind_with_graceful_shutdown(([127, 0, 0, 1], 9229), async move {
+            .bind_with_graceful_shutdown(([127, 0, 0, 1], http_port), async move {
                 shutdown_web.cancelled().await
             })
             .1,
@@ -243,15 +342,43 @@ async fn main() {
         let shutdown = shutdown.clone();
         async move { shutdown.cancelled().await }
     };
-    let mut open_pipe_server = tokio::spawn(async move {
-        connection::listen(
-            "/tmp/siemens/automation/HmiRunTime",
-            move |conn| open_pipe_handler(conn, tag_server.clone(), alarm_server.clone()),
-            shutdown_open_pipe,
-        )
-        .await
-    })
-    .fuse();
+    let open_pipe_path = "/tmp/siemens/automation/HmiRunTime";
+    let mut open_pipe_connection;
+    if args.is_present("client") {
+        let mut conn = match Connection::connect(open_pipe_path).await {
+            Ok(c) => c,
+            Err(e) => {
+                error!("{}", e);
+                return;
+            }
+        };
+
+        match subscribe_alarms(&mut conn).await {
+            Err(e) => {
+                error!("Failed to subscribe alarms: {}", e);
+                return;
+            }
+            Ok(alarms) => for alarm_data in alarms {},
+        }
+        open_pipe_connection = tokio::spawn(async move {
+            tokio::select! {
+            _ = open_pipe_handler(conn, tag_server.clone(), alarm_server.clone()) => {},
+            _ = shutdown_open_pipe => {}
+            }
+            Ok(())
+        })
+        .fuse();
+    } else {
+        open_pipe_connection = tokio::spawn(async move {
+            connection::listen(
+                open_pipe_path,
+                move |conn| open_pipe_handler(conn, tag_server.clone(), alarm_server.clone()),
+                shutdown_open_pipe,
+            )
+            .await
+        })
+        .fuse();
+    }
 
     let mut open_pipe_server_running = true;
     let mut web_server_running = true;
@@ -270,7 +397,7 @@ async fn main() {
                 }
             web_server_running = false;
             },
-            h = (&mut open_pipe_server) => {
+            h = (&mut open_pipe_connection) => {
                 shutdown.cancel();
                 if let Ok(Err(e)) = h {
                     error!("Open Pipe server failed: {}",e)

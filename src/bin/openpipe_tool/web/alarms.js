@@ -56,10 +56,11 @@ class AlarmList
 	    let table = this.table_elem;
 	    let row = table.querySelector("tr[alarm_id='"+a.ID+"'][alarm_instance_id='"+a.InstanceID+"']");
 	    if (row) {
-		let id_elem = row.getElementsByClassName("alarm_id")[0];
-		id_elem.innerText = a.ID;
-		let instance_id_elem = row.getElementsByClassName("alarm_instance_id")[0];
-		instance_id_elem.value = a.InstanceID;
+		let alarm_state_elem =  row.getElementsByClassName("alarm_state")[0];
+		alarm_state_elem.value = a.State;
+
+		
+		
 	    } else {
 		
 		let row = document.createElement("tr");

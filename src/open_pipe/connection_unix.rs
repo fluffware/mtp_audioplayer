@@ -75,6 +75,10 @@ impl ConnectionUnix {
 		_ = (&mut shutdown) => break
             }
         }
+	if let Err(e) = remove_file(path) {
+	    warn!("Failed to delete named pipe {}: {}", path, e);
+	}
+
 	debug!("Server exited");
 	Ok(())
     }
