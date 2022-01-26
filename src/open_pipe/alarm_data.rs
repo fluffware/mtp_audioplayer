@@ -20,7 +20,6 @@ impl AlarmData {
     pub fn cmp_id(&self, other: &Self) -> Ordering {
         self.id
             .cmp(&other.id)
-            .then_with(|| self.instance_id.cmp(&other.instance_id))
     }
 }
 

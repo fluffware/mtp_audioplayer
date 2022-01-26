@@ -137,8 +137,10 @@ impl AlarmServer {
         for alarm in alarms {
             match self.alarms.binary_search_by(|a| a.cmp_id(&alarm)) {
                 Ok(p) => {
-                    self.alarms[p].state = alarm.state;
-                    self.alarms[p].modification_time = alarm.modification_time;
+                    if alarm.state != 128 {
+                        self.alarms[p].state = alarm.state;
+                        self.alarms[p].modification_time = alarm.modification_time;
+                    }
                 }
                 Err(p) => {
                     self.alarms.insert(p, alarm);

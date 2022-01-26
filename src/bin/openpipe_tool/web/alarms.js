@@ -19,7 +19,7 @@ class AlarmList
 	this.table_elem = table_elem;
 	let cookie = Math.round(Math.random()*1e9).toString() + "-" + Date.now();
 	let list = this;
-	let socket = new WebSocket(build_ws_uri("alarms"));
+	let socket = new WebSocket(build_ws_uri("open_pipe"));
 	socket.onerror = function(event) {
 	    console.log("Websocket error:", event);
 	}
@@ -54,18 +54,16 @@ class AlarmList
     {
 	for (let a of alarms) {
 	    let table = this.table_elem;
-	    let row = table.querySelector("tr[alarm_id='"+a.ID+"'][alarm_instance_id='"+a.InstanceID+"']");
+	    let row = table.querySelector("tr[alarm_id='"+a.ID+"']");
 	    if (row) {
-		let alarm_state_elem =  row.getElementsByClassName("alarm_state")[0];
-		alarm_state_elem.value = a.State;
-
-		
-		
+			if (a.State != 128) {
+				let alarm_state_elem =  row.getElementsByClassName("alarm_state")[0];
+				alarm_state_elem.value = a.State;
+			}
 	    } else {
 		
 		let row = document.createElement("tr");
 		row.setAttribute("alarm_id", a.ID);
-		row.setAttribute("alarm_instance_id", a.InstanceID);
 		table.appendChild(row);
 
 		add_const_field(row, "alarm_id", a.ID);

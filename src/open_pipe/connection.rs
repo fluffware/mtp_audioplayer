@@ -203,7 +203,16 @@ pub struct Message {
 }
 
 async fn send_cmd(stream: &mut ConnectionLowLevel, cmd: &Message) -> Result<()> {
-    let mut cmd_bytes = serde_json::to_vec(cmd)?;
+    let mut cmd_str = serde_json::to_string(cmd)?;
+    let mut cmd_bytes = Vec::new();
+    for c in cmd_str.chars() {
+        if c >= '\u{0080}' {
+            cmd_bytes.extend_from_slice(format!("\\u{:04x}",c as u16).as_bytes());
+        } else {
+        cmd_bytes.push(c as u8);
+        }
+    }
+  
     cmd_bytes.push(b'\n');
     debug!("Cmd: {}", String::from_utf8(cmd_bytes.clone()).unwrap());
     stream.send_data(&cmd_bytes).await?;
@@ -231,6 +240,7 @@ impl Connection {
 
     pub async fn get_message(&mut self) -> Result<Message> {
         let data = self.low_level.recv_data().await?;
+        debug!("Got JSON: {}", String::from_utf8(data.clone()).unwrap());
         serde_json::from_slice(&data).map_err(|e| e.into())
     }
 
