@@ -20,6 +20,9 @@ use warp::filters::BoxedFilter;
 use warp::reject::Rejection;
 use warp::ws::Message as WsMessage;
 use warp::{Filter, Reply};
+use std::net::IpAddr;
+use std::env;
+use std::path::{Path, PathBuf};
 
 pub type DynResult<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync + 'static>>;
 
@@ -325,10 +328,10 @@ fn setup_server(
         })
 }
 
-#[cfg(linux)]
-const DEFAUTLT_PIPE_NAME: &str = "/tmp/siemens/automation/HmiRunTime";
+#[cfg(target_os = "linux")]
+const DEFAULT_PIPE_NAME: &str = "/tmp/siemens/automation/HmiRunTime";
 #[cfg(windows)]
-const DEFAUTLT_PIPE_NAME: &str = r"\\.\pipe\HmiRuntime";
+const DEFAULT_PIPE_NAME: &str = r"\\.\pipe\HmiRuntime";
 
 #[tokio::main]
 async fn main() {
@@ -344,10 +347,21 @@ async fn main() {
                 .default_value("9229"),
         )
         .arg(
+            Arg::with_name("http-bind")
+                .long("http-bind")
+                .takes_value(true)
+                .default_value("127.0.0.1"),
+        )
+        .arg(
+            Arg::with_name("file-root")
+                .long("file-root")
+                .takes_value(true)
+        )
+        .arg(
             Arg::with_name("pipe")
                 .long("pipe")
                 .takes_value(true)
-                .default_value(DEFAUTLT_PIPE_NAME),
+                .default_value(DEFAULT_PIPE_NAME),
         );
 
     let args = app_args.get_matches();
@@ -397,16 +411,46 @@ async fn main() {
         .fuse();
     }
 
+    let mut file_root: PathBuf;
+    if let Some(path) = args.value_of("file-root") {
+        file_root = PathBuf::from(path);
+    } else if let Ok(path) = env::current_exe() {
+        file_root = path.parent().unwrap().join("../share/openpipe_tool");
+    } else {
+        file_root = PathBuf::from("web");
+    }
+    if !file_root.is_dir() {
+        file_root = PathBuf::from(".");
+    }
+    let index_file = file_root.join("index.html");
+    if !index_file.exists() {
+        error!("{} does not exist", index_file.to_string_lossy());
+        return;
+    }
+    
     let ws_filter = warp::path("open_pipe")
         .and(warp::ws())
         .map(move |ws: warp::ws::Ws| ws_run(ws));
-    let files = warp::path("files").and(warp::fs::dir("src/bin/openpipe_tool/web"));
+    let files = warp::path("files").and(warp::fs::dir(file_root));
     let root = ws_filter.or(files);
     let web_server = warp::serve(root);
     let shutdown_web = shutdown.clone();
+    let http_bind = match args.value_of("http-bind") {
+        Some(s) => match s.parse::<IpAddr>() {
+            Ok(addr) => addr,
+            Err(_) => {
+                error!("Invalid local address HTTP server");
+                return;
+            }
+        },
+    None => {
+            error!("No value for HTTP port");
+            return;
+        }
+};
     let mut web_server = tokio::spawn(
         web_server
-            .bind_with_graceful_shutdown(([127, 0, 0, 1], http_port), async move {
+            .bind_with_graceful_shutdown((http_bind, http_port), async move {
                 shutdown_web.cancelled().await
             })
             .1,
