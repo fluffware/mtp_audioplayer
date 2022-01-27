@@ -364,13 +364,11 @@ impl ClipPlayer {
         let best_fit = best_fit.ok_or_else(|| Error::NoMatchinConfig("No suitable configuration found".to_string()))?;
         if best_fit.channels() != channels {
             return Err(Error::NoMatchinConfig(
-                "No configuration with {} channels found".to_string(),
-            ));
+                format!("No configuration with {} channels found", channels)));
         }
         if !supports_samplerate(&best_fit, rate) {
             return Err(Error::NoMatchinConfig(
-                "No configuration that supports {} samples/s found".to_string(),
-            ));
+                format!("No configuration that supports {} samples/s found", rate)));
         }
         if best_fit.sample_format() != SampleFormat::I16 {
             return Err(Error::NoMatchinConfig(
