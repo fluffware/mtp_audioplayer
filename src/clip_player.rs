@@ -6,6 +6,7 @@ use cpal::Device;
 use cpal::SampleFormat;
 use cpal::SampleRate;
 use cpal::StreamConfig;
+use cpal::SupportedStreamConfigRange;
 use log::{debug, error, info};
 use std::convert::TryFrom;
 use std::future::{self, Future};
@@ -32,6 +33,7 @@ pub enum Error {
     BuildStream(cpal::BuildStreamError),
     PlayStream(cpal::PlayStreamError),
     SupportedConfig(cpal::SupportedStreamConfigsError),
+    NoMatchinConfig(String),
     ClipPlayer(String),
     Shutdown,
 }
@@ -83,6 +85,7 @@ impl std::fmt::Display for Error {
             Error::PlayStream(e) => e.fmt(f),
             Error::ClipPlayer(e) => e.fmt(f),
             Error::SupportedConfig(e) => e.fmt(f),
+            Error::NoMatchinConfig(e) => e.fmt(f),
             Error::Shutdown => {
                 write!(f, "Playback thread shutdown")
             }
@@ -306,10 +309,15 @@ impl Drop for PlaybackFuture {
     }
 }
 
+fn supports_samplerate(conf: &SupportedStreamConfigRange, rate: u32) -> bool {
+    conf.min_sample_rate().0 <= rate && conf.max_sample_rate().0 >= rate
+}
+
 static NEXT_SEQ_NO: AtomicU32 = AtomicU32::new(1);
 
 impl ClipPlayer {
     pub fn new(pcm_name: &str, rate: u32, channels: u8) -> Result<ClipPlayer, Error> {
+        let channels = channels as u16;
         let host = cpal::default_host();
         let device = if pcm_name == "default" {
             host.default_output_device()
@@ -327,27 +335,49 @@ impl ClipPlayer {
             selected.ok_or_else(|| format!("Playback device {} not found", pcm_name))?
         };
         info!("Audio playback on device {}", device.name()?);
-        for host in cpal::available_hosts() {
-            let host = cpal::host_from_id(host).unwrap();
-            debug!("Host {:?}", host.id());
-
-            for device in host.devices().unwrap() {
-                for conf in device.supported_output_configs()? {
-                    debug!(
-                        "Config: {}ch, {}-{}samples/s {:?}",
-                        conf.channels(),
-                        conf.min_sample_rate().0,
-                        conf.max_sample_rate().0,
-                        conf.sample_format()
-                    );
+        let mut best_fit: Option<SupportedStreamConfigRange> = None;
+        let supported_configs = device.supported_output_configs()?;
+        for conf in supported_configs {
+            debug!(
+                "Config: {}ch, {}-{}samples/s {:?}",
+                conf.channels(),
+                conf.min_sample_rate().0,
+                conf.max_sample_rate().0,
+                conf.sample_format()
+            );
+            if let Some(prev) = &best_fit {
+                if conf.channels() == channels && prev.channels() != channels {
+                    best_fit = Some(conf);
+                } else if supports_samplerate(&conf, rate) && !supports_samplerate(prev, rate) {
+                    best_fit = Some(conf);
+                } else if conf.sample_format() == SampleFormat::I16
+                    && prev.sample_format() != SampleFormat::I16
+                {
+                    best_fit = Some(conf);
                 }
+            } else {
+                best_fit = Some(conf);
             }
+
         }
-        let stream_config = StreamConfig {
-            channels: channels.into(),
-            sample_rate: SampleRate(rate),
-            buffer_size: BufferSize::Fixed(4096),
-        };
+
+        let best_fit = best_fit.ok_or_else(|| Error::NoMatchinConfig("No suitable configuration found".to_string()))?;
+        if best_fit.channels() != channels {
+            return Err(Error::NoMatchinConfig(
+                "No configuration with {} channels found".to_string(),
+            ));
+        }
+        if !supports_samplerate(&best_fit, rate) {
+            return Err(Error::NoMatchinConfig(
+                "No configuration that supports {} samples/s found".to_string(),
+            ));
+        }
+        if best_fit.sample_format() != SampleFormat::I16 {
+            return Err(Error::NoMatchinConfig(
+                "No configuration with signed 16-bit format found".to_string(),
+            ));
+        }
+        let stream_config = best_fit.with_sample_rate(SampleRate(rate)).config();
         let control = Arc::new(PlaybackControl {
             state: Mutex::new(PlaybackState::Setup),
             cond: Condvar::new(),
