@@ -162,7 +162,7 @@ async fn main() {
         }
         Ok(c) => c,
     };
-    let mut tag_names: Vec<String> = tag_ctxt.observed_tags().cloned().collect();
+    let mut tag_names: Vec<String> = tag_ctxt.tag_names();
     match subscribe_tags(&mut pipe, &mut tag_names).await {
         Err(e) => {
             error!("Failed to subscribe tags: {}", e);

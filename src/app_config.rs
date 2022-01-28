@@ -1,6 +1,10 @@
 use crate::actions::action::Action;
 use crate::actions::{
-    parallel::ParallelAction, play::PlayAction, repeat::RepeatAction, sequence::SequenceAction,
+    parallel::ParallelAction,
+    play::PlayAction,
+    repeat::RepeatAction,
+    sequence::SequenceAction,
+    tag_dispatcher::{self, TagDispatched, TagDispatcher},
     wait::WaitAction,
 };
 use crate::alarm_filter::BoolOp as AlarmBoolOp;
@@ -14,9 +18,12 @@ use crate::{
 use log::debug;
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::future::Future;
 use std::path::Path;
+use std::pin::Pin;
 use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
 type DynResult<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
@@ -232,58 +239,76 @@ pub fn setup_actions(
     Ok(ActionContext { actions })
 }
 
-pub struct TagTrigger {
-    pub trigger: TagTriggerType,
-    pub action: Arc<dyn Action + Send + Sync>,
-}
-
-pub trait TagObserver {
-    // Called whenever a tag change value. Returns false if the function
-    // should not be called any more.
-    fn tag_changed(&mut self, name: &str, old_value: &Option<&str>, new_value: &str) -> bool;
+struct TagObservable {
+    state: Option<String>,
+    observers: Vec<oneshot::Sender<String>>,
 }
 
 pub struct TagContext {
-    tag_state: HashMap<String, String>,
-    tag_observers: HashMap<String, Vec<Box<dyn TagObserver>>>,
+    tags: Mutex<HashMap<String, TagObservable>>,
 }
 
 impl TagContext {
     pub fn new() -> TagContext {
         TagContext {
-            tag_state: HashMap::new(),
-            tag_observers: HashMap::new(),
+            tags: Mutex::new(HashMap::new()),
         }
     }
-
-    pub fn add_observer(&mut self, tag: String, obs: Box<dyn TagObserver>) {
-        if let Some(observers) = self.tag_observers.get_mut(&tag) {
-            observers.push(obs);
-        } else {
-            self.tag_observers.insert(tag, vec![obs]);
+    /*
+        pub fn add_observer(&mut self, tag: String, obs: Box<dyn TagObserver>) {
+            if let Some(observers) = self.tag_observers.get_mut(&tag) {
+                observers.push(obs);
+            } else {
+                self.tag_observers.insert(tag, vec![obs]);
+            }
         }
-    }
-
+    */
     pub fn tag_changed(&mut self, name: &str, new_value: &str) {
-        if let Some(observers) = self.tag_observers.get_mut(name) {
-            let old_value = self.tag_state.get(name);
-            let mut i = 0;
-            while i < observers.len() {
-                let observer = &mut observers[i];
-                if observer.tag_changed(name, &old_value.and_then(|s| Some(s.as_str())), new_value)
-                {
-                    i += 1;
-                } else {
-                    observers.remove(i);
+        if let Ok(mut tags) = self.tags.lock() {
+            if let Some(data) = tags.get_mut(name) {
+                data.state = Some(new_value.to_string());
+                for obs in data.observers.drain(0..) {
+                    let _ = obs.send(new_value.to_string());
                 }
             }
         }
-        self.tag_state
-            .insert(name.to_string(), new_value.to_string());
     }
 
-    pub fn observed_tags<'a>(&'a self) -> impl Iterator<Item = &'a String> {
-        self.tag_observers.keys()
+    pub fn tag_names(&self) -> Vec<String> {
+        let tags = self.tags.lock().unwrap();
+        tags.keys().cloned().collect()
+    }
+}
+
+impl TagDispatcher for TagContext {
+    fn wait_value(
+        &self,
+        tag: &str,
+    ) -> Result<(Option<String>, TagDispatched), tag_dispatcher::Error> {
+        let mut tags = self
+            .tags
+            .lock()
+            .map_err(|_| tag_dispatcher::Error::DispatcherNotAvailable)?;
+        let data = tags
+            .get_mut(tag)
+            .ok_or_else(|| tag_dispatcher::Error::TagNotFound)?;
+        let value = data.state.clone();
+        let (tx, rx) = oneshot::channel();
+        data.observers.push(tx);
+        let wait_tag = Box::pin(async {
+            /*
+            rx.await
+                .map_err(|e| tag_dispatcher::Error::DispatcherNotAvailable)
+                */
+            Ok("Hello".to_string())
+        });
+        Ok((value, wait_tag))
+    }
+
+    fn get_value(&self, tag: &str) -> Option<String> {
+        let mut tags = self.tags.lock().ok()?;
+        let data = tags.get_mut(tag)?;
+        data.state.clone()
     }
 }
 
@@ -299,7 +324,7 @@ fn bool_value(s: &str) -> bool {
     }
     false
 }
-
+/*
 struct ToggleObserver {
     action: Arc<dyn Action + Send + Sync>,
     cancel: Option<CancellationToken>,
@@ -392,13 +417,14 @@ impl Drop for WhileEqualObserver {
             cancel.cancel();
         }
     }
-}
+}*/
 pub fn setup_tags(
     player_conf: &PlayerConfig,
     playback_ctxt: &PlaybackContext,
     action_ctxt: &ActionContext,
 ) -> DynResult<TagContext> {
     let mut tag_ctxt = TagContext::new();
+    /*
     for (name, trigger_conf) in &player_conf.tag_triggers {
         let action =
             action_conf_to_action(playback_ctxt, &trigger_conf.action, &action_ctxt.actions)?;
@@ -414,6 +440,7 @@ pub fn setup_tags(
             } //_ => {}
         }
     }
+    */
     Ok(tag_ctxt)
 }
 
