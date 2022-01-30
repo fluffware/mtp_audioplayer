@@ -23,6 +23,39 @@
     <sine id="G#" amplitude="0.5" frequency="830.61" duration="0.1s"/>
 
   </clips>
+  <tags>
+    <tag>SoundAlarm</tag>
+    <tag>SoundInc</tag>
+    <tag>SoundExe</tag>
+    <tag>SoundDec</tag>
+    <tag>AlarmProfile</tag>
+    <tag>AlarmProfile</tag>
+    <!--
+	<toggle tag="AlarmRestart">
+	<alarm_restart/>
+	</toggle>
+	<equals tag="AlarmProfile" value="0">
+	<set_profile>Normal</set_profile>
+	</equals>
+	<equals tag="AlarmProfile" value="1">
+	<set_profile>Operation</set_profile>
+	</equals>
+    -->
+  </tags>
+
+  
+  <alarms>
+    <filter id="AlarmsUnacked">
+      AlarmClassName = 'Larm' AND (State = 'in')
+    </filter>
+    <filter id="AlarmsAcked">
+      AlarmClassName = 'Larm' AND (State = 'in ack')
+    </filter>
+    <filter id="Warnings">
+      AlarmClassName = 'Varning' AND (State = 'in' OR State = 'in ack')
+    </filter>
+  </alarms>
+
   <actions>
     <play id="Dec">SoundDec</play>
     <play id="Inc">SoundInc</play>
@@ -41,7 +74,7 @@
 	<wait>1s</wait>
       </repeat>
     </sequence>
-      <sequence id="Blipp3">
+    <sequence id="Blipp3">
       <repeat count ="3">
 	<play>A</play>
 	<wait>0.1s</wait>
@@ -97,64 +130,18 @@
       <play>SoundInfo</play>
     </sequence>
   </actions>
-  <tags>
-    <toggle tag="SoundAlarm">
-      <play>SoundAlarm</play>
-    </toggle>
-    <toggle tag="SoundInc">
-      <play>SoundInfo</play>
-    </toggle>
-    <toggle tag="SoundExe">
-      <play>SoundExe</play>
-    </toggle>
-    <toggle tag="SoundDec">
-      <play>SoundDec</play>
-    </toggle>
-    <equals tag="AlarmProfile" value="0">
+  
+  <state_machine id="main">
+    <state id="start">
       <repeat>
-	<play>A</play>
-	<wait>0.5s</wait>
+	<wait_tag eq="1">Tag1</wait_tag>
+	<debug>Tag1=1</debug>
+	<wait_tag eq="0">Tag1</wait_tag>
+	<debug>Tag1=0</debug>
+	<wait_tag lt="0">Tag1</wait_tag>
+	<debug>Tag1&lt;0</debug>
       </repeat>
-    </equals>
-    <equals tag="AlarmProfile" value="1">
-      <repeat>
-	<play>B</play>
-	<wait>0.5s</wait>
-      </repeat>
-    </equals>
-    <!--
-    <toggle tag="AlarmRestart">
-      <alarm_restart/>
-    </toggle>
-    <equals tag="AlarmProfile" value="0">
-      <set_profile>Normal</set_profile>
-    </equals>
-    <equals tag="AlarmProfile" value="1">
-      <set_profile>Operation</set_profile>
-    </equals>
--->
-  </tags>
-  <alarms>
-    <filter id="AlarmsUnacked">
-      AlarmClassName = 'Larm' AND (State = 'in')
-    </filter>
-    <filter id="AlarmsAcked">
-      AlarmClassName = 'Larm' AND (State = 'in ack')
-    </filter>
-    <filter id="Warnings">
-      AlarmClassName = 'Varning' AND (State = 'in' OR State = 'in ack')
-    </filter>
-    <profile id="Normal">
-      <while filter="AlarmsUnacked" active="any">
-	<action use="AlarmRepeat"/>
-      </while>
-      <while filter="AlarmsAcked" active="any">
-	<action use="AlarmDelayed"/>
-      </while>
-	
-      <when filter="Warnings" event="raised">
-	<action use="InfoOnce"/>
-      </when>
-    </profile>
-  </alarms>
+    </state>
+  </state_machine>
+  
 </audioplayer>

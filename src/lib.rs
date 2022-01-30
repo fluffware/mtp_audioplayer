@@ -6,4 +6,4 @@ pub mod alarm_filter;
 pub mod priority_scheduler;
 pub mod clip_queue;
 pub mod actions;
-mod xml_stack;
+pub mod state_machine;

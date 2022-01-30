@@ -6,3 +6,4 @@ pub mod parallel;
 pub mod repeat;
 pub mod tag_dispatcher;
 pub mod wait_tag;
+pub mod debug;

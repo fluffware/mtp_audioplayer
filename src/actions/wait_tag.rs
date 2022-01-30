@@ -1,31 +1,33 @@
 use crate::actions::action::{Action, ActionFuture};
 use crate::actions::tag_dispatcher::TagDispatcher;
-use crate::clip_queue::ClipQueue;
 use std::sync::Arc;
-use tokio::time::Duration;
 
 #[derive(Debug, Clone)]
 pub enum TagCondition {
-    Less(i32),
-    LessEqual(i32),
-    Greater(i32),
-    GreaterEqual(i32),
-    EqualInt(i32),
+    Less(f64),
+    LessEqual(f64),
+    Greater(f64),
+    GreaterEqual(f64),
+    EqualNumber(f64),
+    NotEqualNumber(f64),
     EqualString(String),
-    Changed(String),
+    NotEqualString(String),
+    Changed,
 }
 
 impl TagCondition {
     pub fn check(&self, new_tag: &str, old_tag: Option<&String>) -> bool {
         use TagCondition::*;
         match self {
-            Less(cmp) => new_tag.parse::<i32>().map_or(false, |v| v < *cmp),
-            LessEqual(cmp) => new_tag.parse::<i32>().map_or(false, |v| v <= *cmp),
-            Greater(cmp) => new_tag.parse::<i32>().map_or(false, |v| v > *cmp),
-            GreaterEqual(cmp) => new_tag.parse::<i32>().map_or(false, |v| v >= *cmp),
-            EqualInt(cmp) => new_tag.parse::<i32>().map_or(false, |v| v == *cmp),
+            Less(cmp) => new_tag.parse::<f64>().map_or(false, |v| v < *cmp),
+            LessEqual(cmp) => new_tag.parse::<f64>().map_or(false, |v| v <= *cmp),
+            Greater(cmp) => new_tag.parse::<f64>().map_or(false, |v| v > *cmp),
+            GreaterEqual(cmp) => new_tag.parse::<f64>().map_or(false, |v| v >= *cmp),
+            EqualNumber(cmp) => new_tag.parse::<f64>().map_or(false, |v| v == *cmp),
+            NotEqualNumber(cmp) => new_tag.parse::<f64>().map_or(false, |v| v != *cmp),
             EqualString(cmp) => new_tag == cmp,
-            Changed(cmp) => old_tag.map_or(false, |ref v| &cmp != v),
+            NotEqualString(cmp) => new_tag != cmp,
+            Changed => old_tag.map_or(false, |ref v| &new_tag != v),
         }
     }
 }

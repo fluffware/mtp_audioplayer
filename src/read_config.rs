@@ -1,191 +1,64 @@
+use crate::actions::wait_tag::TagCondition;
 use crate::alarm_filter;
-use crate::xml_stack::{TopElement, XmlSiblingIter};
+use roxmltree::{Document, Node, TextPos};
 use std::collections::HashMap;
-use std::convert::TryInto;
 use std::error::Error;
+use std::fs::File;
 use std::io::Read;
 use std::num::NonZeroU32;
+use std::path::Path;
+use std::str::FromStr;
 use std::time::Duration;
-use xml::attribute::OwnedAttribute;
-use xml::name::OwnedName;
-use xml::reader::Result as XmlResult;
-use xml::reader::XmlEvent;
-use xml::ParserConfig;
+
 #[derive(Debug)]
-pub enum ConfigError {
-    UnexpectedEvent(XmlEvent),
-    UnexpectedAttribute(String),
+pub enum ConfigErrorKind {
+    WrongNamespace,
+    UnexpectedElement,
+    UnexpectedText,
+    UnexpectedAttribute,
     MissingAttribute(String),
-    InvalidState {
-        file: String,
-        line: u32,
-        column: u32,
-    },
+    ExclusiveAttributes(&'static [&'static str]),
+    ParseAttribute(String, Box<dyn Error + Send + Sync>),
+    ParseFilter(Box<dyn Error + Send + Sync>),
 }
 
-use ConfigError::*;
+use ConfigErrorKind::*;
 
+impl std::fmt::Display for ConfigErrorKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::result::Result<(), std::fmt::Error> {
+        match self {
+            WrongNamespace => write!(f, "Incorrect namespace for element"),
+            UnexpectedElement => write!(f, "Unexpected element"),
+            UnexpectedText => write!(f, "Unexpected non-whitespace text"),
+            UnexpectedAttribute => write!(f, "Unexpected attribute"),
+            MissingAttribute(name) => write!(f, "Missing attribute '{}'", name),
+	    ExclusiveAttributes(attrs) => write!(f, "Exactly one of the attributes '{}' is required", attrs.join("', '")),
+            ParseAttribute(name, err) => write!(f, "Failed to parse attribute '{}': {}", name, err),
+            ParseFilter(err) => write!(f, "Failed to parse alarm filter: {}", err),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct ConfigError {
+    kind: ConfigErrorKind,
+    pos: TextPos,
+}
+
+impl ConfigError {
+    pub fn new(node: &Node, kind: ConfigErrorKind) -> ConfigError {
+        ConfigError {
+            pos: node.document().text_pos_at(node.range().start),
+            kind,
+        }
+    }
+}
 impl std::error::Error for ConfigError {}
 
 impl std::fmt::Display for ConfigError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::result::Result<(), std::fmt::Error> {
-        match self {
-            UnexpectedEvent(event) => match event {
-                XmlEvent::StartElement { name, .. } => {
-                    write!(f, "Unexpected start tag '{}'", name.local_name)
-                }
-                XmlEvent::EndElement { name } => {
-                    write!(f, "Unexpected end tag '{}'", name.local_name)
-                }
-                XmlEvent::Characters(text) => write!(f, "Unexpected text '{}'", text),
-                ev => write!(f, "Unexpected XML event '{:?}'", ev),
-            },
-            UnexpectedAttribute(name) => write!(f, "Unexpected attribute '{}'", name),
-            MissingAttribute(name) => write!(f, "Missing attribute '{}'", name),
-            InvalidState { file, line, column } => {
-                write!(f, "Invalid state at {}:{}:{}", file, line, column)
-            }
-        }
+        write!(f, "{}:{}: {}", self.pos.row, self.pos.col, self.kind)
     }
-}
-
-macro_rules! invalid_state {
-    () => {
-        InvalidState {
-            file: file!().to_string(),
-            line: line!(),
-            column: column!(),
-        }
-    };
-}
-
-#[derive(Debug)]
-enum AttrError {
-    Missing {
-        element: OwnedName,
-        attribute: OwnedName,
-    },
-    //Unexpected{element: OwnedName, attribute: OwnedName},
-    WrongEventType,
-}
-
-impl std::error::Error for AttrError {}
-
-impl std::fmt::Display for AttrError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::result::Result<(), std::fmt::Error> {
-        match self {
-            AttrError::Missing { element, attribute } => write!(
-                f,
-                "Missing attribute '{}' on element '{}'",
-                attribute.local_name, element.local_name
-            ),
-            /*
-            AttrError::Unexpected{element,attribute} =>
-                write!(f, "Unexpected attribute '{}' on element '{}'",
-                       attribute.local_name, element.local_name),
-             */
-            AttrError::WrongEventType => {
-                write!(f, "Can only read attributes from StartElement events")
-            }
-        }
-    }
-}
-
-fn get_attrs<const N: usize>(
-    event: &XmlEvent,
-    attr_names: &[&str; N],
-    namespace: &Option<String>,
-) -> Result<[String; N], AttrError> {
-    let attrs;
-    let elem_name;
-    if let XmlEvent::StartElement {
-        name, attributes, ..
-    } = event
-    {
-        attrs = attributes;
-        elem_name = name;
-    } else {
-        return Err(AttrError::WrongEventType);
-    }
-
-    let mut out = Vec::with_capacity(N);
-    for local in attr_names {
-        if let Some(attr) = attrs
-            .iter()
-            .find(|a| local == &a.name.local_name && namespace == &a.name.namespace)
-        {
-            out.push(attr.value.clone());
-        } else {
-            return Err(AttrError::Missing {
-                element: elem_name.clone(),
-                attribute: OwnedName {
-                    local_name: local.to_string(),
-                    namespace: namespace.clone(),
-                    prefix: None,
-                },
-            });
-        }
-    }
-    Ok(out.try_into().unwrap())
-}
-
-fn get_attr<'a>(
-    event: &'a XmlEvent,
-    attr_name: &str,
-    namespace: &Option<String>,
-) -> Result<Option<&'a str>, AttrError> {
-    let attrs;
-    if let XmlEvent::StartElement { attributes, .. } = event {
-        attrs = attributes;
-    } else {
-        return Err(AttrError::WrongEventType);
-    }
-
-    let out;
-    if let Some(attr) = attrs
-        .iter()
-        .find(|a| attr_name == a.name.local_name && namespace == &a.name.namespace)
-    {
-        out = Some(attr.value.as_str());
-    } else {
-        out = None;
-    }
-    Ok(out)
-}
-
-// Call child_func for each child node. Stops immediately when an  error is returned.
-fn children_for_each<F, I>(child_iter: &mut XmlSiblingIter<I>, mut child_func: F) -> DynResult<()>
-where
-    F: FnMut(&str, &mut XmlSiblingIter<I>) -> DynResult<()>,
-    I: Iterator<Item = XmlResult<XmlEvent>>,
-{
-    // Loop over all children
-    while let Some(node_res) = child_iter.next_node() {
-        let node = node_res?; // Check for parse error
-        match node {
-            XmlEvent::StartElement {
-                name:
-                    OwnedName {
-                        local_name,
-                        namespace: Some(name_ns),
-                        ..
-                    },
-                ..
-            } => {
-                let local_name = local_name.clone();
-                if name_ns.as_str() == NS {
-                    child_func(local_name.as_str(), child_iter)?;
-                }
-            }
-            // Dont't allow text between element
-            XmlEvent::Characters(text) => {
-                return Err(format!("Extra text found: \"{}\"", text).into())
-            }
-            // Ignore everything else
-            _ => {}
-        }
-    }
-    Ok(())
 }
 
 #[derive(Debug)]
@@ -198,18 +71,6 @@ pub enum ClipType {
     },
 }
 
-#[derive(Debug, Clone)]
-pub enum TagTriggerType {
-    Toggle,
-    Equals { value: i32 },
-}
-
-#[derive(Debug)]
-pub struct TagTriggerConfig {
-    pub trigger: TagTriggerType,
-    pub action: ActionType,
-}
-
 #[derive(Debug)]
 pub enum ActionType {
     Sequence(Vec<ActionType>),
@@ -220,6 +81,11 @@ pub enum ActionType {
         sound: String,
     },
     Wait(Duration),
+    WaitTag {
+        tag_name: String,
+        condition: TagCondition,
+    },
+    Debug(String),
     Reference(String),
     // No count means forever.
     Repeat {
@@ -227,14 +93,18 @@ pub enum ActionType {
         action: Box<ActionType>,
     },
     AlarmRestart,
-    SetProfile {
-        profile: String,
-    },
 }
 
 #[derive(Debug)]
-pub struct ProfileConfig {
-    pub triggers: Vec<AlarmTriggerConfig>,
+pub struct StateConfig {
+    pub id: String,
+    pub action: ActionType,
+}
+
+#[derive(Debug)]
+pub struct StateMachineConfig {
+    pub id: String,
+    pub states: Vec<StateConfig>,
 }
 
 #[derive(Debug)]
@@ -246,66 +116,93 @@ pub struct PlayerConfig {
     pub clip_root: String,
     pub clips: HashMap<String, ClipType>,
     pub named_actions: Vec<(String, ActionType)>,
-    pub tag_triggers: Vec<(String, TagTriggerConfig)>,
+    pub tags: Vec<String>,
     pub named_alarm_filters: HashMap<String, alarm_filter::BoolOp>,
-    pub alarm_profiles: HashMap<String, ProfileConfig>,
+    pub state_machines: Vec<StateMachineConfig>,
 }
 
 const NS: &str = "http://www.elektro-kapsel.se/audioplayer/v1";
 type DynResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
 
-fn expect_element<'a, I>(
-    iter: &'a mut XmlSiblingIter<I>,
-    elem_name: &str,
-) -> DynResult<&'a Vec<OwnedAttribute>>
+fn required_attribute<T>(node: &Node, name: &str) -> Result<T, ConfigError>
 where
-    I: Iterator<Item = XmlResult<XmlEvent>>,
+    T: FromStr,
+    T::Err: std::error::Error + Send + Sync + 'static,
 {
-    let ns_name = OwnedName {
-        local_name: elem_name.to_string(),
-        namespace: Some(NS.to_string()),
-        prefix: None,
+    let attr_str = node
+        .attribute(name)
+        .ok_or_else(|| ConfigError::new(&node, MissingAttribute(name.to_string())))?;
+    let res: Result<T, <T as FromStr>::Err> = attr_str.parse();
+    res.map_err(|e| ConfigError::new(&node, ParseAttribute(name.to_string(), e.into())))
+}
+
+fn optional_attribute<T>(node: &Node, name: &str) -> Result<Option<T>, ConfigError>
+where
+    T: FromStr,
+    T::Err: std::error::Error + Send + Sync + 'static,
+{
+    let attr_str = match node.attribute(name) {
+        Some(v) => v,
+        None => return Ok(None),
     };
-    match iter.current_node() {
-        XmlEvent::StartElement {
-            name, attributes, ..
-        } if name == &ns_name => Ok(attributes),
-        XmlEvent::StartElement {
-            name: OwnedName { local_name, .. },
-            ..
-        } => Err(format!("Expected {}, found {}", elem_name, local_name).into()),
-        _ => Err(format!("Expected {}, no element found", elem_name).into()),
+    let res: Result<T, <T as FromStr>::Err> = attr_str.parse();
+    match res {
+        Ok(res) => Ok(Some(res)),
+        Err(e) => Err(ConfigError::new(
+            &node,
+            ParseAttribute(name.to_string(), e.into()),
+        )),
     }
 }
 
-fn parse_bind<I>(iter: &mut XmlSiblingIter<I>) -> DynResult<String>
-where
-    I: Iterator<Item = XmlResult<XmlEvent>>,
-{
-    Ok(iter.get_text_content()?)
+/// Get text content of an element with no element children.
+/// Non-text nodes are ignored
+fn text_content(node: &Node) -> Result<String, ConfigError> {
+    let mut content = String::new();
+    for child in node.children() {
+        if child.is_element() {
+            return Err(ConfigError::new(&child, UnexpectedElement));
+        }
+        if child.is_text() {
+            content.push_str(&child.text().unwrap());
+        }
+    }
+    Ok(content)
 }
 
-fn parse_file_clip<I>(iter: &mut XmlSiblingIter<I>) -> DynResult<(String, ClipType)>
-where
-    I: Iterator<Item = XmlResult<XmlEvent>>,
-{
-    let [id] = get_attrs(iter.current_node(), &["id"], &None)?;
-    let file_name = iter.get_text_content()?;
+fn parse_duration(time_str: &str) -> DynResult<Duration> {
+    let time_str = time_str.trim();
+    let (value_str, unit_str) = time_str.split_at(time_str.len() - 1);
+    let value: f64 = value_str.trim().parse()?;
+    if value < 0.0 {
+        return Err("Negative duration not allowed".into());
+    }
+    let scale = match unit_str {
+        "s" => 1.0,
+        "m" => 60.0,
+        "h" => 60.0 * 60.0,
+        u => return Err(format!("Unknown time unit '{}'", u).into()),
+    };
+    Ok(Duration::from_secs_f64(value * scale))
+}
+
+fn parse_bind(node: &Node) -> Result<String, ConfigError> {
+    text_content(node)
+}
+
+fn parse_file_clip(node: &Node) -> Result<(String, ClipType), ConfigError> {
+    let id: String = required_attribute(&node, "id")?;
+    let file_name = text_content(&node)?;
     Ok((id, ClipType::File(file_name)))
 }
 
-fn parse_sine_clip<I>(iter: &mut XmlSiblingIter<I>) -> DynResult<(String, ClipType)>
-where
-    I: Iterator<Item = XmlResult<XmlEvent>>,
-{
-    let [id, amp_str, freq_str, dur_str] = get_attrs(
-        iter.current_node(),
-        &["id", "amplitude", "frequency", "duration"],
-        &None,
-    )?;
-    let amplitude = str::parse(&amp_str).map_err(|_e| "Failed to parse amplitude value")?;
-    let frequency = str::parse(&freq_str).map_err(|_e| "Failed to parse frequency value")?;
-    let duration = parse_duration(&dur_str)?;
+fn parse_sine_clip(node: &Node) -> DynResult<(String, ClipType)> {
+    let id = required_attribute(&node, "id")?;
+    let amplitude = required_attribute(&node, "amplitude")?;
+    let frequency = required_attribute(&node, "frequency")?;
+    let dur_str: String = required_attribute(&node, "duration")?;
+    let duration = parse_duration(&dur_str)
+        .map_err(|e| ConfigError::new(&node, ParseAttribute("duration".to_string(), e.into())))?;
     Ok((
         id,
         ClipType::Sine {
@@ -316,91 +213,67 @@ where
     ))
 }
 
-fn parse_clips<I>(parent: &mut XmlSiblingIter<I>) -> DynResult<HashMap<String, ClipType>>
-where
-    I: Iterator<Item = XmlResult<XmlEvent>>,
-{
+fn parse_clips(parent: &Node) -> DynResult<HashMap<String, ClipType>> {
     let mut clips = HashMap::new();
-    children_for_each(&mut parent.child_iter()?, |local_name: &str, child_iter| {
-        match local_name {
-            "file" => {
-                let (id, clip) = parse_file_clip(child_iter)?;
-                clips.insert(id, clip);
+    for node in parent.children() {
+        if check_element_ns(&node)? {
+            match node.tag_name().name() {
+                "file" => {
+                    let (id, clip) = parse_file_clip(&node)?;
+                    clips.insert(id, clip);
+                }
+                "sine" => {
+                    let (id, clip) = parse_sine_clip(&node)?;
+                    clips.insert(id, clip);
+                }
+                _ => return Err(ConfigError::new(&node, UnexpectedElement).into()),
             }
-            "sine" => {
-                let (id, clip) = parse_sine_clip(child_iter)?;
-                clips.insert(id, clip);
-            }
-            _ => return Err(format!("Invalid node {}", local_name).into()),
         }
-        Ok(())
-    })?;
+    }
     Ok(clips)
 }
 
-fn parse_action<I>(parent: &mut XmlSiblingIter<I>) -> DynResult<ActionType>
-where
-    I: Iterator<Item = XmlResult<XmlEvent>>,
-{
+fn parse_action(node: &Node) -> DynResult<ActionType> {
     let action;
-    let node = parent.current_node();
-    match node {
-        XmlEvent::StartElement { name, .. } => {
-            let OwnedName {
-                local_name,
-                namespace: name_ns,
-                ..
-            } = &name;
-            if name_ns == &Some(NS.to_string()) {
-                match local_name.as_str() {
-                    "sequence" => {
-                        action = parse_sequence(parent)?;
-                    }
-                    "parallel" => {
-                        action = parse_parallel(parent)?;
-                    }
-                    "play" => {
-                        action = parse_play(parent)?;
-                    }
-                    "wait" => {
-                        action = parse_wait(parent)?;
-                    }
-                    "alarm_restart" => {
-                        action = ActionType::AlarmRestart;
-                    }
-                    "set_profile" => {
-                        action = parse_set_profile(parent)?;
-                    }
-                    "repeat" => {
-                        action = parse_repeat(parent)?;
-                    }
-                    "action" => {
-                        action = parse_action_ref(parent)?;
-                    }
-                    _ => return Err(UnexpectedEvent(node.clone()).into()),
-                }
-            } else {
-                return Err(UnexpectedEvent(node.clone()).into());
-            }
+    match node.tag_name().name() {
+        "sequence" => {
+            action = parse_sequence(node)?;
         }
-        _ev => return Err(invalid_state!().into()),
+        "parallel" => {
+            action = parse_parallel(node)?;
+        }
+        "play" => {
+            action = parse_play(node)?;
+        }
+        "wait" => {
+            action = parse_wait(node)?;
+        }
+	"wait_tag" => {
+	    action = parse_wait_tag(node)?;
+	}
+        "alarm_restart" => {
+            action = ActionType::AlarmRestart;
+        }
+        "repeat" => {
+            action = parse_repeat(node)?;
+        }
+        "action" => {
+            action = parse_action_ref(node)?;
+        },
+	"debug" => {
+	    action = parse_debug(node)?;
+	}
+        _ => return Err(ConfigError::new(&node, UnexpectedElement).into()),
     }
     Ok(action)
 }
 
-fn parse_play<I>(parent: &mut XmlSiblingIter<I>) -> DynResult<ActionType>
-where
-    I: Iterator<Item = XmlResult<XmlEvent>>,
-{
-    let priority_str = get_attr(parent.current_node(), "priority", &None)?;
-    let priority = if let Some(s) = priority_str {
-        s.parse()?
-    } else {
-        0 // Default priority
-    };
-    let timeout_str = get_attr(parent.current_node(), "timeout", &None)?;
+fn parse_play(node: &Node) -> DynResult<ActionType> {
+    let priority = optional_attribute(&node, "priority")?.unwrap_or(0);
+
+    let timeout_str: Option<String> = optional_attribute(&node, "timeout")?;
     let timeout = timeout_str.map_or(Ok(None), |s| Some(parse_duration(&s)).transpose())?;
-    let sound = parent.get_text_content()?;
+    let sound = text_content(&node)?;
     Ok(ActionType::Play {
         priority,
         timeout,
@@ -408,64 +281,78 @@ where
     })
 }
 
-fn parse_duration(time_str: &str) -> DynResult<Duration> {
-    let time_str = time_str.trim();
-    let (value_str, unit_str) = time_str.split_at(time_str.len() - 1);
-    let value: f64 = value_str.trim().parse()?;
-    let scale = match unit_str {
-        "s" => 1.0,
-        "m" => 60.0,
-        "h" => 60.0 * 60.0,
-        u => return Err(format!("Unknown time unit '{}'", u).into()),
-    };
-    Ok(Duration::from_secs_f64(value * scale))
-}
-
-fn parse_wait<I>(parent: &mut XmlSiblingIter<I>) -> DynResult<ActionType>
-where
-    I: Iterator<Item = XmlResult<XmlEvent>>,
-{
-    let time_str = parent.get_text_content()?;
+fn parse_wait(node: &Node) -> DynResult<ActionType> {
+    let time_str = text_content(&node)?;
 
     Ok(ActionType::Wait(parse_duration(&time_str)?))
 }
 
-fn parse_repeat<I>(parent: &mut XmlSiblingIter<I>) -> DynResult<ActionType>
-where
-    I: Iterator<Item = XmlResult<XmlEvent>>,
+const ConditionAttributes: &[&str] = &["eq","ne","lt","le", "gt", "ge", "eq_str", "ne_str"];
+fn set_tag_condition(node: &Node, var: &mut Option<TagCondition>, cond: TagCondition)
+    -> DynResult<()>
 {
-    let node = parent.current_node();
-    let count_str = get_attr(node, "count", &None)?;
-    let count;
-    if let Some(count_str) = count_str {
-        count = Some(count_str.parse()?);
-    } else {
-        count = None;
+    if var.is_some() {
+	return Err(ConfigError::new(node, ExclusiveAttributes(ConditionAttributes)).into())
     }
-    let action = parse_sequence(parent)?;
+    *var = Some(cond);
+    Ok(())
+}
+    
+fn parse_wait_tag(node: &Node) -> DynResult<ActionType> {
+
+    let mut condition = None;
+    if let Some(v) = optional_attribute::<f64>(&node, "eq")? {
+	set_tag_condition(node, &mut condition, TagCondition::EqualNumber(v))?;
+    }
+    if let Some(v) = optional_attribute::<f64>(&node, "ne")? {
+	set_tag_condition(node, &mut condition, TagCondition::NotEqualNumber(v))?;
+    }
+     if let Some(v) = optional_attribute::<f64>(&node, "lt")? {
+	set_tag_condition(node, &mut condition, TagCondition::Less(v))?;
+     }
+     if let Some(v) = optional_attribute::<f64>(&node, "le")? {
+	set_tag_condition(node, &mut condition, TagCondition::LessEqual(v))?;
+     }
+     if let Some(v) = optional_attribute::<f64>(&node, "gt")? {
+	set_tag_condition(node, &mut condition, TagCondition::Greater(v))?;
+     }
+     if let Some(v) = optional_attribute::<f64>(&node, "ge")? {
+	set_tag_condition(node, &mut condition, TagCondition::GreaterEqual(v))?;
+     }
+     if let Some(v) = optional_attribute::<String>(&node, "eq_str")? {
+	set_tag_condition(node, &mut condition, TagCondition::EqualString(v))?;
+     }
+     if let Some(v) = optional_attribute::<String>(&node, "ne_str")? {
+	set_tag_condition(node, &mut condition, TagCondition::NotEqualString(v))?;
+     }
+    let condition = match condition {
+	Some(cond) => cond,
+	None => return Err(ConfigError::new(node, ExclusiveAttributes(ConditionAttributes)).into())
+    };
+	
+    
+    let tag_name = text_content(&node)?;
+
+    Ok(ActionType::WaitTag{tag_name, condition})
+}
+
+
+fn parse_repeat(node: &Node) -> DynResult<ActionType> {
+    let count = optional_attribute(&node, "count")?;
+    let action = parse_sequence(&node)?;
     Ok(ActionType::Repeat {
         count,
         action: Box::new(action),
     })
 }
 
-fn parse_set_profile<I>(parent: &mut XmlSiblingIter<I>) -> DynResult<ActionType>
-where
-    I: Iterator<Item = XmlResult<XmlEvent>>,
-{
-    let profile = parent.get_text_content()?;
-    Ok(ActionType::SetProfile { profile })
-}
-
-fn parse_sequence<I>(parent: &mut XmlSiblingIter<I>) -> DynResult<ActionType>
-where
-    I: Iterator<Item = XmlResult<XmlEvent>>,
-{
+fn parse_sequence(parent: &Node) -> DynResult<ActionType> {
     let mut actions = Vec::new();
-    let mut children = parent.child_iter()?;
-    while children.next_node().transpose()?.is_some() {
-        let action = parse_action(&mut children)?;
-        actions.push(action);
+    for child in parent.children() {
+        if check_element_ns(&child)? {
+            let action = parse_action(&child)?;
+            actions.push(action);
+        }
     }
     if actions.is_empty() {
         return Err("No action in sequence".into());
@@ -477,15 +364,13 @@ where
     }
 }
 
-fn parse_parallel<I>(parent: &mut XmlSiblingIter<I>) -> DynResult<ActionType>
-where
-    I: Iterator<Item = XmlResult<XmlEvent>>,
-{
+fn parse_parallel(parent: &Node) -> DynResult<ActionType> {
     let mut actions = Vec::new();
-    let mut children = parent.child_iter()?;
-    while children.next_node().transpose()?.is_some() {
-        let action = parse_action(&mut children)?;
-        actions.push(action);
+    for child in parent.children() {
+        if check_element_ns(&child)? {
+            let action = parse_action(&child)?;
+            actions.push(action);
+        }
     }
     if actions.is_empty() {
         return Err("No action in parallel".into());
@@ -497,65 +382,48 @@ where
     }
 }
 
-fn parse_action_ref<I>(parent: &mut XmlSiblingIter<I>) -> DynResult<ActionType>
-where
-    I: Iterator<Item = XmlResult<XmlEvent>>,
-{
-    let node = parent.current_node();
-    let action_ref =
-        get_attr(node, "use", &None)?.ok_or("Action element must hav use attribute")?;
-
-    Ok(ActionType::Reference(action_ref.to_owned()))
+fn parse_action_ref(node: &Node) -> DynResult<ActionType> {
+    let action_ref: String = required_attribute(node, "use")?;
+    Ok(ActionType::Reference(action_ref))
 }
 
-fn parse_actions<I>(
-    parent: &mut XmlSiblingIter<I>,
-    actions: &mut Vec<(String, ActionType)>,
-) -> DynResult<()>
-where
-    I: Iterator<Item = XmlResult<XmlEvent>>,
-{
-    let mut children = parent.child_iter()?;
-    while children.next_node().transpose()?.is_some() {
-        let id = get_attr(children.current_node(), "id", &None)?
-            .ok_or("Action must have an id")?
-            .to_owned();
-        let action = parse_action(&mut children)?;
-        actions.push((id, action));
+fn parse_debug(node: &Node) -> DynResult<ActionType> {
+    let text = text_content(&node)?;
+    Ok(ActionType::Debug(text))
+}
+
+fn parse_actions(parent: &Node, actions: &mut Vec<(String, ActionType)>) -> DynResult<()> {
+    for child in parent.children() {
+        if check_element_ns(&child)? {
+            let id = required_attribute(&child, "id")?;
+            let action = parse_action(&child)?;
+            actions.push((id, action));
+        }
     }
     Ok(())
 }
 
-fn parse_tags<I>(parent: &mut XmlSiblingIter<I>) -> DynResult<Vec<(String, TagTriggerConfig)>>
-where
-    I: Iterator<Item = XmlResult<XmlEvent>>,
-{
+fn parse_tag(node: &Node) -> DynResult<String> {
+    Ok(text_content(&node)?)
+}
+
+fn parse_tags(parent: &Node) -> DynResult<Vec<String>> {
     let mut tags = Vec::new();
-    children_for_each(&mut parent.child_iter()?, |local_name, child_iter| {
-        let node = child_iter.current_node();
-        let [tag_name] = get_attrs(node, &["tag"], &None)?;
-        let trigger;
-        match local_name {
-            "toggle" => {
-                trigger = TagTriggerType::Toggle;
+    for child in parent.children() {
+        if check_element_ns(&child)? {
+            match child.tag_name().name() {
+                "tag" => {
+                    let tag_name = parse_tag(&child)?;
+                    tags.push(tag_name);
+                }
+                _ => return Err(ConfigError::new(&child, UnexpectedElement).into()),
             }
-            "equals" => {
-                let [value_str] = get_attrs(node, &["value"], &None)?;
-                let value = value_str.parse()?;
-                trigger = TagTriggerType::Equals { value };
-            }
-            _ => return Err(UnexpectedEvent(node.clone()).into()),
         }
-        let mut seq = child_iter.child_iter()?;
-        let action = parse_sequence(&mut seq)?;
-        tags.push((tag_name, TagTriggerConfig { trigger, action }));
-        Ok(())
-    })?;
+    }
     Ok(tags)
 }
 
-
-#[derive(Debug,Copy, Clone)]
+#[derive(Debug, Copy, Clone)]
 pub enum AlarmTriggerType {
     WhileAnyActive,
     WhileNoneActive,
@@ -572,121 +440,108 @@ pub struct AlarmTriggerConfig {
     pub action: ActionType,
 }
 
-fn parse_alarm_profile<I>(
-    parent: &mut XmlSiblingIter<I>,
-
-) -> DynResult<ProfileConfig>
-where
-    I: Iterator<Item = XmlResult<XmlEvent>>,
-{
-    let mut triggers: Vec<AlarmTriggerConfig> = Vec::new();
-    children_for_each(&mut parent.child_iter()?, |local_name: &str, child| {
-        let node = child.current_node();
-        match local_name {
-            "while" => {
-                let filter_id = get_attr(node, "filter", &None)?
-                    .ok_or("while must have filter_id attribute")?
-                    .to_string();
-                let state = get_attr(node, "active", &None)?;
-                let trigger_type = match state {
-                    Some("none") => AlarmTriggerType::WhileNoneActive,
-                    Some("any") => AlarmTriggerType::WhileAnyActive,
-                    Some(_) => return Err("Invalid active attribute value for while".into()),
-                    None => AlarmTriggerType::WhileAnyActive,
-                };
-                let action = parse_sequence(child)?;
-                triggers.push(AlarmTriggerConfig {
-                    trigger_type,
-                    filter_id,
-                    action,
-                });
-                Ok(())
-            }
-            "when" => {
-                let filter_id = get_attr(node, "filter", &None)?
-                    .ok_or("when must have filter_id attribute")?
-                    .to_string();
-                let event = get_attr(node, "event", &None)?;
-                let trigger_type = match event {
-                    Some("raised") => AlarmTriggerType::WhenRaised,
-                    Some("first_raised") => AlarmTriggerType::WhenFirstRaised,
-                    Some("cleared") => AlarmTriggerType::WhenCleared,
-                    Some("last_cleared") => AlarmTriggerType::WhenLastCleared,
-                    Some(_) => return Err("Invalid event attribute value for when".into()),
-                    None => AlarmTriggerType::WhenRaised,
-                };
-                let action = parse_sequence(child)?;
-                triggers.push(AlarmTriggerConfig {
-                    trigger_type,
-                    filter_id,
-                    action,
-                });
-
-                Ok(())
-            }
-            _ => return Err(UnexpectedEvent(child.current_node().clone()).into()),
-        }
-    })?;
-    let profile = ProfileConfig{triggers};
-    Ok(profile)
-}
-fn parse_alarms<I>(
-    parent: &mut XmlSiblingIter<I>,
+fn parse_alarms(
+    parent: &Node,
     named_filters: &mut HashMap<String, alarm_filter::BoolOp>,
-    profiles: &mut HashMap<String,ProfileConfig>,
-) -> DynResult<()>
-where
-    I: Iterator<Item = XmlResult<XmlEvent>>,
-{
-    children_for_each(&mut parent.child_iter()?, |local_name: &str, child| {
-        match local_name {
-            "filter" => {
-                let node = child.current_node();
-                let [filter_id] = get_attrs(node, &["id"], &None)?;
-                let filter_def = child.get_text_content()?;
-                let op = match alarm_filter::parse_filter(&filter_def) {
-                    Ok(op) => op,
-                    Err(e) => return Err(format!("Failed to parse alarm filter: {}", e).into()),
-                };
-                named_filters.insert(filter_id, op);
+) -> DynResult<()> {
+    let mut named_filters: HashMap<String, alarm_filter::BoolOp> = HashMap::new();
+    for child in parent.children() {
+        if check_element_ns(&child)? {
+            match child.tag_name().name() {
+                "filter" => {
+                    let filter_id = required_attribute(&child, "id")?;
+                    let filter_def = text_content(&child)?.trim().to_owned();
+                    let op = match alarm_filter::parse_filter(&filter_def) {
+                        Ok(op) => op,
+                        Err(e) => {
+                            let text_node = child.children().next();
+                            let text_node_ref = match text_node {
+                                Some(ref node) => node,
+                                None => &child,
+                            };
+                            return Err(
+                                ConfigError::new(text_node_ref, ParseFilter(e.to_string().into())).into()
+                            );
+                        }
+                    };
+                    named_filters.insert(filter_id, op);
+                }
+                _ => {
+                    return Err(ConfigError::new(&child, UnexpectedElement).into());
+                }
             }
-            "profile" => {
-		let node = child.current_node();
-		let [name] = get_attrs(node, &["id"], &None)?;
-                let profile = parse_alarm_profile(child)?;
-		profiles.insert(name, profile);
-            }
-            _ => return Err(UnexpectedEvent(child.current_node().clone()).into()),
         }
-        Ok(())
-    })?;
-    
-    Ok(())
-}
-
-fn parse_playback_device<I>(
-    iter: &mut XmlSiblingIter<I>,
-    player: &mut PlayerConfig,
-) -> DynResult<()>
-where
-    I: Iterator<Item = XmlResult<XmlEvent>>,
-{
-    let [rate_str, channels_str] = get_attrs(iter.current_node(), &["rate", "channels"], &None)?;
-    player.rate = rate_str.parse()?;
-    player.channels = channels_str.parse()?;
-
-    player.playback_device = iter.get_text_content()?;
+    }
 
     Ok(())
 }
 
-pub fn read_file<R: Read>(source: R) -> DynResult<PlayerConfig> {
-    let parser_conf = ParserConfig::new()
-        .trim_whitespace(true)
-        .ignore_comments(true);
-    let reader = parser_conf.create_reader(source);
-    let mut top = TopElement::new(reader.into_iter())?;
-    let mut node_iter = top.child_iter()?;
+fn parse_state(parent: &Node) -> DynResult<StateConfig> {
+    let id = required_attribute(&parent, "id")?;
+    let mut actions = Vec::new();
+    for child in parent.children() {
+        if check_element_ns(&child)? {
+            let action = parse_action(&child)?;
+            actions.push(action);
+        }
+    }
+    let action = if actions.len() == 1 {
+        actions.pop().unwrap()
+    } else {
+        ActionType::Parallel(actions)
+    };
+
+    Ok(StateConfig { id, action })
+}
+
+fn parse_state_machine(parent: &Node) -> DynResult<StateMachineConfig> {
+    let id = required_attribute(&parent, "id")?;
+    let mut states = Vec::new();
+    for child in parent.children() {
+        if check_element_ns(&child)? {
+            match child.tag_name().name() {
+                "state" => {
+                    let state = parse_state(&child)?;
+                    states.push(state);
+                }
+                _ => return Err(ConfigError::new(&child, UnexpectedElement).into()),
+            }
+        }
+    }
+    Ok(StateMachineConfig { id, states })
+}
+
+fn parse_playback_device(node: &Node, player: &mut PlayerConfig) -> DynResult<()> {
+    player.rate = required_attribute(&node, "rate")?;
+    player.channels = required_attribute(&node, "channels")?;
+
+    player.playback_device = text_content(&node)?;
+
+    Ok(())
+}
+
+fn check_element_ns(node: &Node) -> Result<bool, ConfigError> {
+    if node.is_element() {
+        if node.tag_name().namespace() != Some(NS) {
+            return Err(ConfigError::new(&node, WrongNamespace));
+        }
+        return Ok(true);
+    } else if node.is_text() {
+        if let Some(text) = node.text() {
+            // Don't allow non-whitespace around elements
+            if text.find(|c: char| !c.is_whitespace()).is_some() {
+                return Err(ConfigError::new(&node, UnexpectedText));
+            }
+        }
+    }
+    Ok(false)
+}
+pub fn read_file<P: AsRef<Path>>(path: P) -> DynResult<PlayerConfig> {
+    let mut file = File::open(path)?;
+    let mut file_content = String::new();
+    file.read_to_string(&mut file_content)?;
+    let document = Document::parse(&file_content)?;
+
     let mut player = PlayerConfig {
         bind: "/tmp/siemens/automation/HmiRunTime".to_string(),
         playback_device: "".to_string(),
@@ -695,43 +550,46 @@ pub fn read_file<R: Read>(source: R) -> DynResult<PlayerConfig> {
         clip_root: String::new(),
         clips: HashMap::new(),
         named_actions: Vec::new(),
-        tag_triggers: Vec::new(),
-	named_alarm_filters: HashMap::new(),
-        alarm_profiles: HashMap::new(),
+        tags: Vec::new(),
+        named_alarm_filters: HashMap::new(),
+        state_machines: Vec::new(),
     };
 
-    expect_element(&mut node_iter, "audioplayer")?;
-    children_for_each(&mut node_iter, |local_name, node_iter| {
-        match local_name {
-            "bind" => {
-                player.bind = parse_bind(node_iter)?;
-            }
-            "playback_device" => {
-                parse_playback_device(node_iter, &mut player)?;
-            }
-            "clips" => {
-                if let Some(path) = get_attr(node_iter.current_node(), "path", &None)? {
-                    player.clip_root = path.to_string();
+    let root = document.root_element();
+    if !root.has_tag_name((NS, "audioplayer")) {
+        return Err("The root node must be 'audioplayer'".into());
+    }
+
+    for node in root.children() {
+        if check_element_ns(&node)? {
+            match node.tag_name().name() {
+                "bind" => {
+                    player.bind = parse_bind(&node)?;
                 }
-                player.clips = parse_clips(node_iter)?;
+                "playback_device" => {
+                    parse_playback_device(&node, &mut player)?;
+                }
+                "clips" => {
+                    player.clip_root = required_attribute(&node, "path")?;
+                    player.clips = parse_clips(&node)?;
+                }
+                "actions" => {
+                    parse_actions(&node, &mut player.named_actions)?;
+                }
+                "tags" => {
+                    player.tags = parse_tags(&node)?;
+                }
+                "alarms" => {
+                    parse_alarms(&node, &mut player.named_alarm_filters)?;
+                }
+                "state_machine" => {
+                    player.state_machines.push(parse_state_machine(&node)?);
+                }
+
+                _ => return Err(ConfigError::new(&node, UnexpectedElement).into()),
             }
-            "actions" => {
-                parse_actions(node_iter, &mut player.named_actions)?;
-            }
-            "tags" => {
-                player.tag_triggers = parse_tags(node_iter)?;
-            }
-            "alarms" => {
-                parse_alarms(
-                    node_iter,
-                    &mut player.named_alarm_filters,
-                    &mut player.alarm_profiles,
-                )?;
-            }
-            _ => return Err(format!("Invalid node {}", local_name).into()),
         }
-        Ok(())
-    })?;
+    }
     Ok(player)
 }
 

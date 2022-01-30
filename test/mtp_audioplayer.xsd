@@ -4,14 +4,7 @@
 	   xmlns="http://www.elektro-kapsel.se/audioplayer/v1"
 	   elementFormDefault="qualified">
 
-<xs:element name="pets">
-  <xs:complexType>
-    <xs:sequence minOccurs="0" maxOccurs="unbounded">
-      <xs:element name="dog" type="xs:string"/>
-      <xs:element name="cat" type="xs:string"/>
-    </xs:sequence>
-  </xs:complexType>
-</xs:element> 
+
   <xs:element name="audioplayer">
     <xs:complexType>
       <xs:sequence>
@@ -28,9 +21,10 @@
 	   </xs:complexType>
 	</xs:element>
 	<xs:element name="clips" type="clips"/>
-	<xs:element name="actions" type="named_actions" minOccurs="1"/>
 	<xs:element name="tags" type="tags" minOccurs="1"/>
 	<xs:element name="alarms" type="alarms" minOccurs="1"/>
+	<xs:element name="actions" type="named_actions" minOccurs="1"/>
+	<xs:element name="state_machine" type="state_machine" minOccurs="0"/>
       </xs:sequence>
     </xs:complexType>
   </xs:element>
@@ -64,18 +58,7 @@
  
   <xs:complexType name="tags">
     <xs:choice maxOccurs="unbounded">
-      <xs:element name="toggle">
-	<xs:complexType>
-	  <xs:group ref="action" maxOccurs="unbounded"/>
-	  <xs:attribute name="tag" type="xs:string" use="required"/>
-	</xs:complexType>
-      </xs:element>
-      <xs:element name="equals">
-	<xs:complexType>
-	  <xs:group ref="action" maxOccurs="unbounded"/>
-	  <xs:attribute name="tag" type="xs:string" use="required"/>
-	  <xs:attribute name="value" type="xs:integer" use="required"/>
-	</xs:complexType>
+      <xs:element name="tag" type="xs:string">
       </xs:element>
     </xs:choice>
   </xs:complexType>
@@ -91,10 +74,10 @@
 	  </xs:simpleContent>
 	</xs:complexType>
       </xs:element>
-      <xs:element name="profile" type="profile" maxOccurs="unbounded"/>
     </xs:sequence>
   </xs:complexType>
 
+  <!--
   <xs:complexType name="profile">
     <xs:choice maxOccurs="unbounded">
       <xs:element name="while">
@@ -130,7 +113,7 @@
     </xs:choice>
     <xs:attributeGroup ref="id_attr"/>
   </xs:complexType>
-  
+  -->
   <xs:group name="action">
     <xs:choice>
       <xs:element name="play">
@@ -154,6 +137,25 @@
 	  </xs:simpleContent>
 	</xs:complexType>
       </xs:element>
+      
+      <xs:element name="wait_tag">
+	<xs:complexType>
+	  <xs:simpleContent>
+	    <xs:extension base="xs:string">
+	      <xs:attributeGroup ref="action_id_attr"/>
+	      <xs:attribute name="eq" type="xs:decimal"/>
+	      <xs:attribute name="ne" type="xs:decimal"/>
+	      <xs:attribute name="lt" type="xs:decimal"/>
+	      <xs:attribute name="le" type="xs:decimal"/>
+	      <xs:attribute name="gt" type="xs:decimal"/>
+	      <xs:attribute name="ge" type="xs:decimal"/>
+	      <xs:attribute name="eq_str" type="xs:decimal"/>
+	      <xs:attribute name="ne_str" type="xs:decimal"/>
+	    </xs:extension>
+	  </xs:simpleContent>
+	</xs:complexType>
+      </xs:element>
+
       
       <xs:element name="sequence">
 	<xs:complexType>
@@ -198,6 +200,16 @@
 	  </xs:simpleContent>
 	</xs:complexType>
       </xs:element>
+        
+      <xs:element name="debug">
+	<xs:complexType>
+	   <xs:simpleContent>
+	    <xs:extension base="xs:string">
+	      <xs:attributeGroup ref="action_id_attr"/>
+	    </xs:extension>
+	  </xs:simpleContent>
+	</xs:complexType>
+      </xs:element>
       
     </xs:choice>
   </xs:group>
@@ -215,6 +227,18 @@
       <xs:pattern value="[0-9]+(\.[0-9]+)?[smh]"/>
     </xs:restriction>
   </xs:simpleType>
+
+  <xs:complexType name="state_machine" >
+    <xs:choice maxOccurs="unbounded">
+      <xs:element name="state" type="state" maxOccurs="unbounded">
+      </xs:element>
+    </xs:choice>
+    <xs:attributeGroup ref="id_attr"/>
+  </xs:complexType>
+
+  <xs:complexType name="state">
+    <xs:group ref="action" maxOccurs="unbounded"/>
+    <xs:attributeGroup ref="id_attr"/>
+ </xs:complexType>
+ 
 </xs:schema>
-
-

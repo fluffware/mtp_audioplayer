@@ -1,15 +1,8 @@
-use tokio::io::AsyncWriteExt;
-
-use tokio::sync::mpsc::{self, Receiver, Sender};
-
-use std::fs::{create_dir_all, remove_file};
 use std::future::Future;
-
-use log::{debug, error, warn};
+use log::{debug};
 use serde::{Deserialize, Serialize};
 use serde_json;
 use std::process;
-use tokio::pin;
 
 use super::ConnectionLowLevel;
 
@@ -203,7 +196,7 @@ pub struct Message {
 }
 
 async fn send_cmd(stream: &mut ConnectionLowLevel, cmd: &Message) -> Result<()> {
-    let mut cmd_str = serde_json::to_string(cmd)?;
+    let cmd_str = serde_json::to_string(cmd)?;
     let mut cmd_bytes = Vec::new();
     for c in cmd_str.chars() {
         if c >= '\u{0080}' {

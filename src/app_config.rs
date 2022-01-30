@@ -1,16 +1,18 @@
 use crate::actions::action::Action;
 use crate::actions::{
+    debug::DebugAction,
     parallel::ParallelAction,
     play::PlayAction,
     repeat::RepeatAction,
     sequence::SequenceAction,
     tag_dispatcher::{self, TagDispatched, TagDispatcher},
     wait::WaitAction,
+    wait_tag::WaitTagAction,
 };
 use crate::alarm_filter::BoolOp as AlarmBoolOp;
 use crate::clip_queue::ClipQueue;
 use crate::open_pipe::alarm_data::AlarmData;
-use crate::read_config::{ActionType, AlarmTriggerType, TagTriggerType};
+use crate::read_config::{ActionType, AlarmTriggerType};
 use crate::{
     clip_player::ClipPlayer,
     read_config::{ClipType, PlayerConfig},
@@ -18,9 +20,7 @@ use crate::{
 use log::debug;
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::future::Future;
 use std::path::Path;
-use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use tokio::sync::oneshot;
@@ -173,6 +173,7 @@ pub struct ActionContext {
 
 fn action_conf_to_action(
     playback_ctxt: &PlaybackContext,
+    tag_ctxt: &Arc<TagContext>,
     action_conf: &ActionType,
     action_map: &HashMap<String, Arc<dyn Action + Send + Sync>>,
 ) -> DynResult<Arc<dyn Action + Send + Sync>> {
@@ -180,7 +181,8 @@ fn action_conf_to_action(
         ActionType::Sequence(conf_actions) => {
             let mut sequence = SequenceAction::new();
             for conf_action in conf_actions {
-                let action = action_conf_to_action(playback_ctxt, conf_action, action_map)?;
+                let action =
+                    action_conf_to_action(playback_ctxt, tag_ctxt, conf_action, action_map)?;
                 sequence.add_arc_action(action);
             }
             Ok(Arc::new(sequence))
@@ -188,7 +190,8 @@ fn action_conf_to_action(
         ActionType::Parallel(conf_actions) => {
             let mut parallel = ParallelAction::new();
             for conf_action in conf_actions {
-                let action = action_conf_to_action(playback_ctxt, conf_action, action_map)?;
+                let action =
+                    action_conf_to_action(playback_ctxt, tag_ctxt, conf_action, action_map)?;
                 parallel.add_arc_action(action);
             }
             Ok(Arc::new(parallel))
@@ -219,21 +222,30 @@ fn action_conf_to_action(
             Ok(action.clone())
         }
         ActionType::Repeat { count, action } => {
-            let repeated = action_conf_to_action(playback_ctxt, action, action_map)?;
+            let repeated = action_conf_to_action(playback_ctxt, tag_ctxt, action, action_map)?;
             Ok(Arc::new(RepeatAction::new(repeated, *count)))
         }
         ActionType::AlarmRestart => Err("Alarm restart action not implemented".into()),
-        ActionType::SetProfile { profile: _ } => Err("Set profile action not implemented".into()),
+        ActionType::WaitTag {
+            tag_name,
+            condition,
+        } => Ok(Arc::new(WaitTagAction::new(
+            tag_name.clone(),
+            condition.clone(),
+            tag_ctxt.clone(),
+        ))),
+        ActionType::Debug(text) => Ok(Arc::new(DebugAction::new(text.clone()))),
     }
 }
 
 pub fn setup_actions(
     player_conf: &PlayerConfig,
     playback_ctxt: &PlaybackContext,
+    tag_ctxt: &Arc<TagContext>,
 ) -> DynResult<ActionContext> {
     let mut actions = HashMap::new();
     for (name, action_conf) in &player_conf.named_actions {
-        let action = action_conf_to_action(playback_ctxt, action_conf, &actions)?;
+        let action = action_conf_to_action(playback_ctxt, tag_ctxt, action_conf, &actions)?;
         actions.insert(name.clone(), action);
     }
     Ok(ActionContext { actions })
@@ -254,16 +266,9 @@ impl TagContext {
             tags: Mutex::new(HashMap::new()),
         }
     }
-    /*
-        pub fn add_observer(&mut self, tag: String, obs: Box<dyn TagObserver>) {
-            if let Some(observers) = self.tag_observers.get_mut(&tag) {
-                observers.push(obs);
-            } else {
-                self.tag_observers.insert(tag, vec![obs]);
-            }
-        }
-    */
-    pub fn tag_changed(&mut self, name: &str, new_value: &str) {
+
+    pub fn tag_changed(&self, name: &str, new_value: &str) {
+        debug!("{}: -> {}", name, new_value);
         if let Ok(mut tags) = self.tags.lock() {
             if let Some(data) = tags.get_mut(name) {
                 data.state = Some(new_value.to_string());
@@ -296,11 +301,8 @@ impl TagDispatcher for TagContext {
         let (tx, rx) = oneshot::channel();
         data.observers.push(tx);
         let wait_tag = Box::pin(async {
-            /*
             rx.await
                 .map_err(|e| tag_dispatcher::Error::DispatcherNotAvailable)
-                */
-            Ok("Hello".to_string())
         });
         Ok((value, wait_tag))
     }
@@ -324,123 +326,21 @@ fn bool_value(s: &str) -> bool {
     }
     false
 }
-/*
-struct ToggleObserver {
-    action: Arc<dyn Action + Send + Sync>,
-    cancel: Option<CancellationToken>,
-}
 
-impl ToggleObserver {
-    pub fn new(action: Arc<dyn Action + Send + Sync>) -> ToggleObserver {
-        ToggleObserver {
-            action,
-            cancel: None,
-        }
-    }
-}
-
-impl TagObserver for ToggleObserver {
-    fn tag_changed(&mut self, _name: &str, old_value: &Option<&str>, new_value: &str) -> bool {
-        if let Some(old_value) = old_value {
-            if bool_value(old_value) != bool_value(new_value) {
-                if let Some(cancel) = self.cancel.take() {
-                    cancel.cancel();
-                }
-                let action = self.action.clone();
-                let cancel = CancellationToken::new();
-                self.cancel = Some(cancel.clone());
-                tokio::spawn(async move {
-                    tokio::select! {
-                        _ = action.run() => {},
-                        _ = cancel.cancelled() => {},
-                    }
-                });
-            }
-        }
-        true
-    }
-}
-
-impl Drop for ToggleObserver {
-    fn drop(&mut self) {
-        if let Some(cancel) = self.cancel.take() {
-            cancel.cancel();
-        }
-    }
-}
-
-struct WhileEqualObserver {
-    action: Arc<dyn Action + Send + Sync>,
-    cancel: Option<CancellationToken>,
-    equals: i32,
-}
-
-impl WhileEqualObserver {
-    pub fn new(action: Arc<dyn Action + Send + Sync>, equals: i32) -> WhileEqualObserver {
-        WhileEqualObserver {
-            action,
-            cancel: None,
-            equals,
-        }
-    }
-}
-
-impl TagObserver for WhileEqualObserver {
-    fn tag_changed(&mut self, _name: &str, old_value: &Option<&str>, new_value: &str) -> bool {
-        if let Ok(new_value) = new_value.parse::<i32>() {
-            if let Some(old_value) = old_value.and_then(|v| v.parse::<i32>().ok()) {
-                if old_value != new_value {
-                    if let Some(cancel) = self.cancel.take() {
-                        cancel.cancel();
-                    }
-                    if new_value == self.equals {
-                        let action = self.action.clone();
-                        let cancel = CancellationToken::new();
-                        self.cancel = Some(cancel.clone());
-                        tokio::spawn(async move {
-                            tokio::select! {
-                                _ = action.run() => {},
-                                _ = cancel.cancelled() => {},
-                            }
-                        });
-                    }
-                }
-            }
-        }
-        true
-    }
-}
-
-impl Drop for WhileEqualObserver {
-    fn drop(&mut self) {
-        if let Some(cancel) = self.cancel.take() {
-            cancel.cancel();
-        }
-    }
-}*/
-pub fn setup_tags(
-    player_conf: &PlayerConfig,
-    playback_ctxt: &PlaybackContext,
-    action_ctxt: &ActionContext,
-) -> DynResult<TagContext> {
+pub fn setup_tags(player_conf: &PlayerConfig) -> DynResult<TagContext> {
     let mut tag_ctxt = TagContext::new();
-    /*
-    for (name, trigger_conf) in &player_conf.tag_triggers {
-        let action =
-            action_conf_to_action(playback_ctxt, &trigger_conf.action, &action_ctxt.actions)?;
-        match trigger_conf.trigger {
-            TagTriggerType::Toggle => {
-                tag_ctxt.add_observer(name.to_string(), Box::new(ToggleObserver::new(action)));
-            }
-            TagTriggerType::Equals { value } => {
-                tag_ctxt.add_observer(
-                    name.to_string(),
-                    Box::new(WhileEqualObserver::new(action, value)),
-                );
-            } //_ => {}
+    {
+        let mut tags = tag_ctxt.tags.lock().unwrap();
+        for name in &player_conf.tags {
+            tags.insert(
+                name.to_string(),
+                TagObservable {
+                    state: None,
+                    observers: Vec::new(),
+                },
+            );
         }
     }
-    */
     Ok(tag_ctxt)
 }
 
@@ -586,27 +486,19 @@ pub fn setup_alarms(
     let alarm_state = Vec::new();
     let mut alarm_triggers = Vec::new();
 
-    for (name, profile_conf) in &player_conf.alarm_profiles {
-        for trigger_conf in &profile_conf.triggers {
-            let action =
-                action_conf_to_action(playback_ctxt, &trigger_conf.action, &action_ctxt.actions)?;
-            let filter = player_conf
-                .named_alarm_filters
-                .get(&trigger_conf.filter_id)
-                .ok_or(format!("No alarm filter named {}", &trigger_conf.filter_id))?;
-            let trigger = AlarmTrigger {
-                trigger_type: trigger_conf.trigger_type,
-                filter: Box::new(filter.clone()),
-                action,
-                cancel: None,
-                matching: Vec::with_capacity(5),
-            };
-            alarm_triggers.push(trigger);
-        }
-    }
     let alarm_ctxt = AlarmContext {
         alarm_state,
         alarm_triggers,
     };
     Ok(alarm_ctxt)
+}
+
+struct StateMachineContext {
+}
+
+fn setup_state_machines(
+    player_conf: &PlayerConfig,
+    action_ctxt: &ActionContext,
+) -> DynResult<StateMachineContext> {
+    Ok(StateMachineContext {})
 }

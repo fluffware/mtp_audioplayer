@@ -1,4 +1,4 @@
-use futures::future::join_all;
+use futures::future::try_join_all;
 use std::sync::Arc;
 
 use crate::actions::action::{Action, ActionFuture};
@@ -34,7 +34,7 @@ impl Action for ParallelAction {
             for a in actions {
                 action_futures.push(a.run())
             }
-            join_all(action_futures).await;
+            try_join_all(action_futures).await?;
             Ok(())
         })
     }

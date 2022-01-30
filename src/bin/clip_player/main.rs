@@ -79,15 +79,7 @@ async fn main() {
     let app_config;
     let base_dir;
     if let Some(conf_file) = args.value_of("config") {
-	let reader = match File::open(conf_file) {
-	    Ok(r) => r,
-	    Err(e) => {
-		error!("Failed to open configuration file '{}': {}", 
-		       conf_file, e);
-		return;
-	    }
-	};
-	match read_config::read_file(reader) {
+	match read_config::read_file(conf_file) {
 	    Ok(conf) => app_config = Some(conf),
 	    Err(e) => {
 		error!("Failed to read configuration file '{}': {}", 
@@ -214,7 +206,9 @@ async fn run_action(app_conf: &PlayerConfig, action_name: &str, base_dir: &Path)
 		    -> DynResult<()>
 {
     let playback_ctxt = app_config::setup_clip_playback(app_conf, base_dir)?;
-    let action_ctxt = app_config::setup_actions(app_conf, &playback_ctxt)?;
+    let tag_ctxt = app_config::setup_tags(app_conf)?;
+    let tag_ctxt = Arc::new(tag_ctxt);
+    let action_ctxt = app_config::setup_actions(app_conf, &playback_ctxt,&tag_ctxt)?;
     let action = action_ctxt.actions.get(action_name).ok_or_else(
 	|| format!("No action named '{}' found", action_name))?;
     debug!("Running");
@@ -227,10 +221,9 @@ async fn toggle_tag(app_conf: &PlayerConfig, tag_name: &str, base_dir: &Path)
 		   -> DynResult<()>
 {
     let playback_ctxt = app_config::setup_clip_playback(app_conf, base_dir)?;
-    let action_ctxt = app_config::setup_actions(app_conf, &playback_ctxt)?;
-    let mut tag_ctxt = app_config::setup_tags(app_conf,
-					  &playback_ctxt,
-					  &action_ctxt)?;
+    let tag_ctxt = app_config::setup_tags(app_conf)?;
+    let tag_ctxt = Arc::new(tag_ctxt);
+    let action_ctxt = app_config::setup_actions(app_conf, &playback_ctxt, &tag_ctxt)?;
     tag_ctxt.tag_changed(tag_name, "false");
     tag_ctxt.tag_changed(tag_name, "true");
     Ok(())

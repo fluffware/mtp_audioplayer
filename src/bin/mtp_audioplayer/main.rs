@@ -8,6 +8,7 @@ use std::env;
 use std::ffi::OsStr;
 use std::fs::File;
 use std::path::Path;
+use std::sync::Arc;
 use tokio::signal;
 use tokio::time::{timeout, Duration};
 
@@ -45,9 +46,7 @@ async fn subscribe_tags(
                         break 'next_event;
                     }
                 }
-                Err(e) => {
-		    return Err(e.into())
-                }
+                Err(e) => return Err(e.into()),
             },
         }
     }
@@ -66,7 +65,12 @@ async fn subscribe_alarms(pipe: &mut open_pipe::Connection) -> Result<Vec<AlarmD
                 Ok(event) => match event.message {
                     MessageVariant::NotifySubscribeAlarm(params) => {
                         debug!("Subcribed alarms: {:?}", params);
-                        alarms = params.params.alarms.into_iter().map(|a| AlarmData::from(a)).collect();
+                        alarms = params
+                            .params
+                            .alarms
+                            .into_iter()
+                            .map(|a| AlarmData::from(a))
+                            .collect();
                         break 'next_event;
                     }
                     MessageVariant::ErrorSubscribeAlarm(error) => return Err(error.into()),
@@ -81,14 +85,14 @@ async fn subscribe_alarms(pipe: &mut open_pipe::Connection) -> Result<Vec<AlarmD
     Ok(alarms)
 }
 
-async fn trig_on_tag(tag_ctxt: &mut TagContext, tag_name: &str, tag_value: &str) {
+async fn trig_on_tag(tag_ctxt: &Arc<TagContext>, tag_name: &str, tag_value: &str) {
     tag_ctxt.tag_changed(tag_name, tag_value);
 }
 
 async fn handle_msg(
     pipe: &mut open_pipe::Connection,
     msg: &open_pipe::Message,
-    tag_ctxt: &mut TagContext,
+    tag_ctxt: &Arc<TagContext>,
     alarm_ctxt: &mut AlarmContext,
 ) -> Result<()> {
     let set_tags = Vec::<WriteTagValue>::new();
@@ -117,16 +121,16 @@ async fn handle_msg(
     Ok(())
 }
 
-fn read_configuration(path: &Path) -> Result<(PlayerConfig, TagContext, AlarmContext)> {
-    let reader = File::open(path)?;
-    let app_conf = read_config::read_file(reader)?;
+fn read_configuration(path: &Path) -> Result<(PlayerConfig, Arc<TagContext>, AlarmContext)> {
+    let app_conf = read_config::read_file(path)?;
     let base_dir = Path::new(path)
         .parent()
         .ok_or("Configuration file has no parent")?;
 
     let playback_ctxt = app_config::setup_clip_playback(&app_conf, base_dir)?;
-    let action_ctxt = app_config::setup_actions(&app_conf, &playback_ctxt)?;
-    let tag_ctxt = app_config::setup_tags(&app_conf, &playback_ctxt, &action_ctxt)?;
+    let tag_ctxt = app_config::setup_tags(&app_conf)?;
+    let tag_ctxt = Arc::new(tag_ctxt);
+    let action_ctxt = app_config::setup_actions(&app_conf, &playback_ctxt, &tag_ctxt)?;
     let alarm_ctxt = app_config::setup_alarms(&app_conf, &playback_ctxt, &action_ctxt)?;
     Ok((app_conf, tag_ctxt, alarm_ctxt))
 }
@@ -211,7 +215,7 @@ async fn main() {
                     Ok(msg) => {
                         if let Err(e) =
                             handle_msg(&mut pipe, &msg,
-                                       &mut tag_ctxt, &mut alarm_ctxt).await {
+                                       &tag_ctxt, &mut alarm_ctxt).await {
                                 error!("Failed to handle Open Pipe message: {}",e);
                                 return;
                             }

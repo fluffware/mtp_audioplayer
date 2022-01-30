@@ -1,17 +1,14 @@
 use cpal::traits::DeviceTrait;
 use cpal::traits::HostTrait;
 use cpal::traits::StreamTrait;
-use cpal::BufferSize;
 use cpal::Device;
 use cpal::SampleFormat;
 use cpal::SampleRate;
 use cpal::StreamConfig;
 use cpal::SupportedStreamConfigRange;
 use log::{debug, error, info};
-use std::convert::TryFrom;
 use std::future::{self, Future};
 use std::mem;
-use std::ops::Deref;
 use std::ops::DerefMut;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -19,7 +16,6 @@ use std::sync::Arc;
 use std::sync::{Condvar, Mutex, MutexGuard};
 use std::task::{Context, Poll, Waker};
 use std::thread;
-use std::time::Duration;
 
 #[derive(Debug, Clone)]
 pub struct ClipPlayer {
@@ -240,7 +236,7 @@ fn playback_thread(device: Device, stream_config: StreamConfig, ctrl: Arc<Playba
         }
     };
     if let Err(e) = stream.play() {
-        error!("Failed to start audio playback: e");
+        error!("Failed to start audio playback: {}", e);
         return;
     }
 
@@ -338,13 +334,13 @@ impl ClipPlayer {
         let mut best_fit: Option<SupportedStreamConfigRange> = None;
         let supported_configs = device.supported_output_configs()?;
         for conf in supported_configs {
-            debug!(
+            /*debug!(
                 "Config: {}ch, {}-{}samples/s {:?}",
                 conf.channels(),
                 conf.min_sample_rate().0,
                 conf.max_sample_rate().0,
                 conf.sample_format()
-            );
+            );*/
             if let Some(prev) = &best_fit {
                 if conf.channels() == channels && prev.channels() != channels {
                     best_fit = Some(conf);
