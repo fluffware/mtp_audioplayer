@@ -1,6 +1,7 @@
 use crate::actions::action::{Action, ActionFuture};
 use crate::actions::tag_dispatcher::TagDispatcher;
 use std::sync::Arc;
+use std::num::ParseFloatError;
 
 #[derive(Debug, Clone)]
 pub enum TagCondition {
@@ -15,16 +16,27 @@ pub enum TagCondition {
     Changed,
 }
 
+/// Parse float and map true and false to 1 and 0 respectively
+fn parse_number(num_str: &str) -> Result<f64, ParseFloatError>
+{
+    let lower = num_str.to_lowercase();
+    match lower.as_str() {
+        "true" => Ok(1.0),
+        "false" => Ok(0.0),
+        _ => num_str.parse::<f64>()
+    }
+}
+
 impl TagCondition {
     pub fn check(&self, new_tag: &str, old_tag: Option<&String>) -> bool {
         use TagCondition::*;
         match self {
-            Less(cmp) => new_tag.parse::<f64>().map_or(false, |v| v < *cmp),
-            LessEqual(cmp) => new_tag.parse::<f64>().map_or(false, |v| v <= *cmp),
-            Greater(cmp) => new_tag.parse::<f64>().map_or(false, |v| v > *cmp),
-            GreaterEqual(cmp) => new_tag.parse::<f64>().map_or(false, |v| v >= *cmp),
-            EqualNumber(cmp) => new_tag.parse::<f64>().map_or(false, |v| v == *cmp),
-            NotEqualNumber(cmp) => new_tag.parse::<f64>().map_or(false, |v| v != *cmp),
+            Less(cmp) => parse_number(new_tag).map_or(false, |v| v < *cmp),
+            LessEqual(cmp) => parse_number(new_tag).map_or(false, |v| v <= *cmp),
+            Greater(cmp) => parse_number(new_tag).map_or(false, |v| v > *cmp),
+            GreaterEqual(cmp) => parse_number(new_tag).map_or(false, |v| v >= *cmp),
+            EqualNumber(cmp) => parse_number(new_tag).map_or(false, |v| v == *cmp),
+            NotEqualNumber(cmp) => parse_number(new_tag).map_or(false, |v| v != *cmp),
             EqualString(cmp) => new_tag == cmp,
             NotEqualString(cmp) => new_tag != cmp,
             Changed => old_tag.map_or(false, |ref v| &new_tag != v),
@@ -66,7 +78,7 @@ where
             loop {
                 let (value, wait) = dispatcher.wait_value(&tag)?;
                 if let Some(value) = value.as_ref() {
-                    if cond.check(value, None) {
+                    if cond.check(value, prev.as_ref()) {
                         return Ok(());
                     }
                 }

@@ -272,11 +272,9 @@ fn setup_client(open_pipe_path: &str) -> Arc<dyn Fn(warp::ws::Ws) -> Box<dyn Rep
 }
 
 fn setup_server(
-    open_pipe_path: &str,
     tag_server: &Arc<Mutex<TagServer>>,
     alarm_server: &Arc<Mutex<AlarmServer>>,
 ) -> Arc<dyn Fn(warp::ws::Ws) -> Box<dyn Reply> + Send + Sync> {
-    let open_pipe_path = Arc::new(open_pipe_path.to_owned());
     let tag_server_web = tag_server.clone();
     let alarm_server_web = alarm_server.clone();
     Arc::new(move |ws: warp::ws::Ws| {
@@ -394,7 +392,7 @@ async fn main() {
     } else {
         let tag_server = Arc::new(Mutex::new(TagServer::new(true)));
         let alarm_server = Arc::new(Mutex::new(AlarmServer::new()));
-        ws_run = setup_server(&open_pipe_path, &tag_server, &alarm_server);
+        ws_run = setup_server(&tag_server, &alarm_server);
         let shutdown_open_pipe = {
             let shutdown = shutdown.clone();
             async move { shutdown.cancelled().await }

@@ -123,34 +123,6 @@ async fn main() {
 		    }
 		}
 	    }
-	},
-	("action", Some(args)) => {
-	    let app_conf = match app_config {
-		Some(c) => c,
-		None => {
-		    error!("No configuration");
-		    return
-		}
-	    };
-	    let action = args.value_of("ACTION").unwrap();
-	    if let Err(e) = run_action(
-		&app_conf, action,base_dir.unwrap()).await {
-		error!("{}", e);
-	    }
-	},
-	("toggle_tag", Some(args)) => {
-	    let app_conf = match app_config {
-		Some(c) => c,
-		None => {
-		    error!("No configuration");
-		    return
-		}
-	    };
-	    let action = args.value_of("TAG").unwrap();
-	    if let Err(e) = toggle_tag(
-		&app_conf, action,base_dir.unwrap()).await {
-		error!("{}", e);
-	    }
 	}
 	_ => {}
     }
@@ -202,29 +174,5 @@ async fn play_clip(app_conf: &PlayerConfig, clip: &str, base_dir: &Path)
     Ok(())
 }
 
-async fn run_action(app_conf: &PlayerConfig, action_name: &str, base_dir: &Path)
-		    -> DynResult<()>
-{
-    let playback_ctxt = app_config::setup_clip_playback(app_conf, base_dir)?;
-    let tag_ctxt = app_config::setup_tags(app_conf)?;
-    let tag_ctxt = Arc::new(tag_ctxt);
-    let action_ctxt = app_config::setup_actions(app_conf, &playback_ctxt,&tag_ctxt)?;
-    let action = action_ctxt.actions.get(action_name).ok_or_else(
-	|| format!("No action named '{}' found", action_name))?;
-    debug!("Running");
-    
-    action.run().await?;
-    Ok(())
-}
 
-async fn toggle_tag(app_conf: &PlayerConfig, tag_name: &str, base_dir: &Path)
-		   -> DynResult<()>
-{
-    let playback_ctxt = app_config::setup_clip_playback(app_conf, base_dir)?;
-    let tag_ctxt = app_config::setup_tags(app_conf)?;
-    let tag_ctxt = Arc::new(tag_ctxt);
-    let action_ctxt = app_config::setup_actions(app_conf, &playback_ctxt, &tag_ctxt)?;
-    tag_ctxt.tag_changed(tag_name, "false");
-    tag_ctxt.tag_changed(tag_name, "true");
-    Ok(())
-}
+

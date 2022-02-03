@@ -22,9 +22,8 @@
 	</xs:element>
 	<xs:element name="clips" type="clips"/>
 	<xs:element name="tags" type="tags" minOccurs="1"/>
-	<xs:element name="alarms" type="alarms" minOccurs="1"/>
-	<xs:element name="actions" type="named_actions" minOccurs="1"/>
-	<xs:element name="state_machine" type="state_machine" minOccurs="0"/>
+	<xs:element name="alarms" type="alarms" minOccurs="0"/>
+	<xs:element name="state_machine" type="state_machine" minOccurs="0" maxOccurs="unbounded"/>
       </xs:sequence>
     </xs:complexType>
   </xs:element>
@@ -52,10 +51,6 @@
     <xs:attribute name="path" type="xs:string"/>
   </xs:complexType>
   
-  <xs:complexType name="named_actions">
-    <xs:group ref="action" maxOccurs="unbounded"/>
-  </xs:complexType>
- 
   <xs:complexType name="tags">
     <xs:choice maxOccurs="unbounded">
       <xs:element name="tag" type="xs:string">
@@ -77,43 +72,6 @@
     </xs:sequence>
   </xs:complexType>
 
-  <!--
-  <xs:complexType name="profile">
-    <xs:choice maxOccurs="unbounded">
-      <xs:element name="while">
-	<xs:complexType>
-	  <xs:group ref="action" maxOccurs="unbounded"/>
-	  <xs:attribute name="filter" type="xs:string" use="required"/>
-	  <xs:attribute name="active" default="any">
-	    <xs:simpleType>
-	      <xs:restriction base="xs:string">
-		<xs:enumeration value="none"/>
-		<xs:enumeration value="any"/>
-	      </xs:restriction>
-	    </xs:simpleType>
-	  </xs:attribute>
-	</xs:complexType>
-      </xs:element>
-       <xs:element name="when">
-	<xs:complexType>
-	  <xs:group ref="action" maxOccurs="unbounded"/>
-	  <xs:attribute name="filter" type="xs:string" use="required"/>
-	  <xs:attribute name="event" default="raised">
-	    <xs:simpleType>
-	      <xs:restriction base="xs:string">
-		<xs:enumeration value="raised"/>
-		<xs:enumeration value="cleared"/>
-		<xs:enumeration value="first_raised"/>
-		<xs:enumeration value="last_cleared"/>
-	      </xs:restriction>
-	    </xs:simpleType>
-	  </xs:attribute>
-	</xs:complexType>
-      </xs:element>
-    </xs:choice>
-    <xs:attributeGroup ref="id_attr"/>
-  </xs:complexType>
-  -->
   <xs:group name="action">
     <xs:choice>
       <xs:element name="play">
@@ -151,12 +109,40 @@
 	      <xs:attribute name="ge" type="xs:decimal"/>
 	      <xs:attribute name="eq_str" type="xs:decimal"/>
 	      <xs:attribute name="ne_str" type="xs:decimal"/>
+	      <xs:attribute name="changed" type="xs:string"/>
 	    </xs:extension>
 	  </xs:simpleContent>
 	</xs:complexType>
       </xs:element>
 
+      <xs:element name="wait_alarm">
+	<xs:complexType>
+	  <xs:simpleContent>
+	    <xs:extension base="xs:string">
+	      <xs:attribute name="count">
+		<xs:simpleType>
+                  <xs:restriction base="xs:string">
+                    <xs:enumeration value="none" />
+                    <xs:enumeration value="any" />
+                    <xs:enumeration value="inc" />
+		    <xs:enumeration value="dec" />
+                  </xs:restriction>
+		</xs:simpleType>
+	      </xs:attribute>
+	    </xs:extension>
+	  </xs:simpleContent>
+	</xs:complexType>
+      </xs:element>
       
+       <xs:element name="goto">
+	<xs:complexType>
+	  <xs:simpleContent>
+	    <xs:extension base="xs:string">
+	    </xs:extension>
+	  </xs:simpleContent>
+	</xs:complexType>
+       </xs:element>
+       
       <xs:element name="sequence">
 	<xs:complexType>
 	  <xs:group ref="action" maxOccurs="unbounded"/>
@@ -183,21 +169,6 @@
 	<xs:complexType>
 	  <xs:attributeGroup ref="action_id_attr"/>
 	  <xs:attribute name="use" type="xs:string"/>
-	</xs:complexType>
-      </xs:element>
-       <xs:element name="alarm_restart">
-	<xs:complexType>
-	  <xs:attributeGroup ref="action_id_attr"/>
-	</xs:complexType>
-      </xs:element>
-      
-      <xs:element name="set_profile">
-	<xs:complexType>
-	   <xs:simpleContent>
-	    <xs:extension base="xs:string">
-	      <xs:attributeGroup ref="action_id_attr"/>
-	    </xs:extension>
-	  </xs:simpleContent>
 	</xs:complexType>
       </xs:element>
         

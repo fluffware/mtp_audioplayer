@@ -1,4 +1,5 @@
 use crate::actions::action::Action;
+use crate::state_machine::StateMachine;
 use crate::actions::{
     debug::DebugAction,
     parallel::ParallelAction,
@@ -6,25 +7,26 @@ use crate::actions::{
     repeat::RepeatAction,
     sequence::SequenceAction,
     tag_dispatcher::{self, TagDispatched, TagDispatcher},
+    alarm_dispatcher::{self, AlarmDispatched, AlarmDispatcher},
     wait::WaitAction,
     wait_tag::WaitTagAction,
+    wait_alarm::WaitAlarmAction,
+    goto::GotoAction,
 };
 use crate::alarm_filter::BoolOp as AlarmBoolOp;
 use crate::clip_queue::ClipQueue;
 use crate::open_pipe::alarm_data::AlarmData;
-use crate::read_config::{ActionType, AlarmTriggerType};
+use crate::read_config::{ActionType};
+use crate::open_pipe::alarm_data::AlarmId;
 use crate::{
     clip_player::ClipPlayer,
     read_config::{ClipType, PlayerConfig},
 };
 use log::debug;
-use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use tokio::sync::oneshot;
-use tokio_util::sync::CancellationToken;
 
 type DynResult<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
@@ -171,18 +173,25 @@ pub struct ActionContext {
     pub actions: HashMap<String, Arc<dyn Action + Send + Sync>>,
 }
 
+struct ActionBuildData<'a>
+{
+    playback_ctxt: &'a PlaybackContext,
+    tag_ctxt: &'a Arc<TagContext>,
+    alarm_ctxt: &'a Arc<AlarmContext>,
+    state_machine_map: &'a HashMap<String, Arc<StateMachine>>,
+    current_state_machine: &'a Arc<StateMachine>,
+}
+
 fn action_conf_to_action(
-    playback_ctxt: &PlaybackContext,
-    tag_ctxt: &Arc<TagContext>,
-    action_conf: &ActionType,
-    action_map: &HashMap<String, Arc<dyn Action + Send + Sync>>,
+    build_data: &ActionBuildData,
+    action_conf: &ActionType,    
 ) -> DynResult<Arc<dyn Action + Send + Sync>> {
     match action_conf {
         ActionType::Sequence(conf_actions) => {
             let mut sequence = SequenceAction::new();
             for conf_action in conf_actions {
                 let action =
-                    action_conf_to_action(playback_ctxt, tag_ctxt, conf_action, action_map)?;
+                    action_conf_to_action(build_data, conf_action)?;
                 sequence.add_arc_action(action);
             }
             Ok(Arc::new(sequence))
@@ -191,7 +200,7 @@ fn action_conf_to_action(
             let mut parallel = ParallelAction::new();
             for conf_action in conf_actions {
                 let action =
-                    action_conf_to_action(playback_ctxt, tag_ctxt, conf_action, action_map)?;
+                    action_conf_to_action(build_data, conf_action)?;
                 parallel.add_arc_action(action);
             }
             Ok(Arc::new(parallel))
@@ -201,12 +210,12 @@ fn action_conf_to_action(
             timeout,
             sound,
         } => {
-            let samples = playback_ctxt
+            let samples = build_data.playback_ctxt
                 .clips
                 .get(sound)
                 .ok_or_else(|| format!("No clip named '{}'", sound))?;
             let action = PlayAction::new(
-                playback_ctxt.clip_queue.clone(),
+                build_data.playback_ctxt.clip_queue.clone(),
                 *priority,
                 *timeout,
                 samples.clone(),
@@ -214,42 +223,49 @@ fn action_conf_to_action(
             Ok(Arc::new(action))
         }
         ActionType::Wait(timeout) => Ok(Arc::new(WaitAction::new(*timeout))),
-        ActionType::Reference(action_ref) => {
-            let action = action_map
-                .get(action_ref)
-                .ok_or_else(|| format!("No preceding action with id {} found", action_ref))?;
-
-            Ok(action.clone())
-        }
         ActionType::Repeat { count, action } => {
-            let repeated = action_conf_to_action(playback_ctxt, tag_ctxt, action, action_map)?;
+            let repeated = action_conf_to_action(build_data, action)?;
             Ok(Arc::new(RepeatAction::new(repeated, *count)))
         }
-        ActionType::AlarmRestart => Err("Alarm restart action not implemented".into()),
+        ActionType::Goto(state_name) => {
+            let state_machine;
+            let state_name_ref;
+            if let Some((machine, name)) = state_name.split_once(":") {
+                state_machine = match build_data.state_machine_map.get(name) {
+                    Some(s) => s,
+                    None => return Err(format!("No state machine named '{}'", machine).into())
+                };
+                state_name_ref = name;
+            } else {
+                state_machine = build_data.current_state_machine;
+                state_name_ref = state_name;
+            }
+            let state_index = match state_machine.find_state_index(state_name_ref) {
+                Some(s) => s,
+                None => return Err(format!("No state named '{}' in state machine '{}'", state_name, state_machine.name).into())
+            };
+            Ok(Arc::new(GotoAction::new(state_index, Arc::downgrade(state_machine))))
+        }
         ActionType::WaitTag {
             tag_name,
             condition,
         } => Ok(Arc::new(WaitTagAction::new(
             tag_name.clone(),
             condition.clone(),
-            tag_ctxt.clone(),
+            build_data.tag_ctxt.clone(),
+        ))),
+        ActionType::WaitAlarm {
+            filter_name,
+            condition,
+        } => Ok(Arc::new(WaitAlarmAction::new(
+            filter_name.clone(),
+            condition.clone(),
+            build_data.alarm_ctxt.clone(),
         ))),
         ActionType::Debug(text) => Ok(Arc::new(DebugAction::new(text.clone()))),
     }
 }
 
-pub fn setup_actions(
-    player_conf: &PlayerConfig,
-    playback_ctxt: &PlaybackContext,
-    tag_ctxt: &Arc<TagContext>,
-) -> DynResult<ActionContext> {
-    let mut actions = HashMap::new();
-    for (name, action_conf) in &player_conf.named_actions {
-        let action = action_conf_to_action(playback_ctxt, tag_ctxt, action_conf, &actions)?;
-        actions.insert(name.clone(), action);
-    }
-    Ok(ActionContext { actions })
-}
 
 struct TagObservable {
     state: Option<String>,
@@ -302,7 +318,7 @@ impl TagDispatcher for TagContext {
         data.observers.push(tx);
         let wait_tag = Box::pin(async {
             rx.await
-                .map_err(|e| tag_dispatcher::Error::DispatcherNotAvailable)
+                .map_err(|_| tag_dispatcher::Error::DispatcherNotAvailable)
         });
         Ok((value, wait_tag))
     }
@@ -314,21 +330,8 @@ impl TagDispatcher for TagContext {
     }
 }
 
-fn bool_value(s: &str) -> bool {
-    let lcase = s.to_lowercase();
-    if lcase == "false" {
-        return false;
-    } else if lcase == "true" {
-        return true;
-    }
-    if s.parse().unwrap_or(0) != 0 {
-        return true;
-    }
-    false
-}
-
 pub fn setup_tags(player_conf: &PlayerConfig) -> DynResult<TagContext> {
-    let mut tag_ctxt = TagContext::new();
+    let tag_ctxt = TagContext::new();
     {
         let mut tags = tag_ctxt.tags.lock().unwrap();
         for name in &player_conf.tags {
@@ -344,133 +347,28 @@ pub fn setup_tags(player_conf: &PlayerConfig) -> DynResult<TagContext> {
     Ok(tag_ctxt)
 }
 
-fn find_alarm_index(alarms: &[Rc<RefCell<AlarmData>>], key: &AlarmData) -> Result<usize, usize> {
-    alarms.binary_search_by(|a| a.borrow().cmp_id(&key))
-}
 
-pub struct AlarmTrigger {
-    trigger_type: AlarmTriggerType,
+struct AlarmFilterState {
+    
     filter: Box<AlarmBoolOp>,
-    action: Arc<dyn Action + Send + Sync>,
-    cancel: Option<CancellationToken>,
-    matching: Vec<Rc<RefCell<AlarmData>>>,
+    matching: HashSet<AlarmId>,
+    observers: Vec<oneshot::Sender<u32>>,    
 }
 
-impl AlarmTrigger {
-    pub fn start(&mut self) {
-        if self.cancel.is_some() {
-            return;
-        }
-        let action = self.action.clone();
-        let cancel = CancellationToken::new();
-        self.cancel = Some(cancel.clone());
-        tokio::spawn(async move {
-            tokio::select! {
-                _ = action.run() => {},
-                _ = cancel.cancelled() => {},
+impl AlarmFilterState {
+    pub fn handle_notification(&mut self, new_alarm: &AlarmData) -> DynResult<()> {
+        if self.filter.evaluate(new_alarm) {
+            if self.matching.insert(AlarmId::from(new_alarm)) {
+                let count = self.matching.len();
+                for obs in self.observers.drain(0..) {
+                    let _ = obs.send(count as u32);
+                }
             }
-        });
-        debug!("Trigger {} started", self.filter.to_string());
-    }
-
-    pub fn restart(&mut self) {
-        self.stop();
-        self.start();
-    }
-
-    pub fn stop(&mut self) {
-        if let Some(cancel) = self.cancel.take() {
-            debug!("Trigger {} stopped", self.filter.to_string());
-            cancel.cancel();
-        }
-    }
-}
-
-impl Drop for AlarmTrigger {
-    fn drop(&mut self) {
-        if let Some(cancel) = self.cancel.take() {
-            cancel.cancel();
-        }
-    }
-}
-
-pub struct AlarmContext {
-    alarm_state: Vec<Rc<RefCell<AlarmData>>>,
-    alarm_triggers: Vec<AlarmTrigger>,
-}
-
-impl AlarmContext {
-    pub fn handle_notification(&mut self, new_alarm: AlarmData) -> DynResult<()> {
-        let old_state;
-        let new_state = new_alarm.state;
-        let alarm_cell;
-        match find_alarm_index(&self.alarm_state, &new_alarm) {
-            Ok(p) => {
-                old_state = self.alarm_state[p].borrow().state;
-                self.alarm_state[p].borrow_mut().state = new_alarm.state;
-                alarm_cell = &self.alarm_state[p];
-            }
-            Err(p) => {
-                old_state = 0;
-                self.alarm_state.insert(p, Rc::new(RefCell::new(new_alarm)));
-                alarm_cell = &self.alarm_state[p];
-            }
-        }
-        debug!("{} -> {}", old_state, new_state);
-        if old_state != new_state {
-            for trigger in &mut self.alarm_triggers {
-                let res = find_alarm_index(&trigger.matching, &alarm_cell.borrow());
-                if trigger.filter.evaluate(&alarm_cell.borrow()) {
-                    debug!("Filter {} evaluated to true", trigger.filter.to_string());
-                    if let Err(index) = res {
-                        trigger.matching.insert(index, alarm_cell.clone());
-                        match trigger.trigger_type {
-                            AlarmTriggerType::WhileAnyActive => {
-                                if !trigger.matching.is_empty() {
-                                    debug!("Start any");
-                                    trigger.start();
-                                }
-                            }
-                            AlarmTriggerType::WhileNoneActive => {
-                                debug!("Stop any");
-                                trigger.stop();
-                            }
-                            AlarmTriggerType::WhenRaised => {
-                                trigger.restart();
-                            }
-                            AlarmTriggerType::WhenFirstRaised => {
-                                if trigger.matching.len() == 1 {
-                                    trigger.restart();
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-                } else {
-                    if let Ok(index) = res {
-                        trigger.matching.remove(index);
-                        match trigger.trigger_type {
-                            AlarmTriggerType::WhileAnyActive => {
-                                if trigger.matching.is_empty() {
-                                    trigger.stop();
-                                }
-                            }
-                            AlarmTriggerType::WhileNoneActive => {
-                                if trigger.matching.is_empty() {
-                                    trigger.start();
-                                }
-                            }
-                            AlarmTriggerType::WhenCleared => {
-                                trigger.restart();
-                            }
-                            AlarmTriggerType::WhenLastCleared => {
-                                if trigger.matching.is_empty() {
-                                    trigger.restart();
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
+        } else {
+            if self.matching.remove(&AlarmId::from(new_alarm)) {
+                let count = self.matching.len();
+                for obs in self.observers.drain(0..) {
+                    let _ = obs.send(count as u32);
                 }
             }
         }
@@ -478,27 +376,117 @@ impl AlarmContext {
     }
 }
 
+pub struct AlarmContext {
+    alarm_filters: Mutex<HashMap<String, AlarmFilterState>>
+}
+
+impl AlarmContext {
+    pub fn handle_notification(&self, new_alarm: &AlarmData) -> DynResult<()> {
+        let mut filters = self.alarm_filters.lock().map_err(|e| format!("Failed to lock alarm filters: {}", e))?;
+        for filter in filters.values_mut() {
+            filter.handle_notification(new_alarm)?;
+        }
+        Ok(())
+    }
+}
+
+impl AlarmDispatcher for AlarmContext
+{
+    
+    fn wait_alarm_filter(&self, filter_name: &str) -> Result<(u32, AlarmDispatched), alarm_dispatcher::Error>
+    {
+        let mut filters = self
+        .alarm_filters
+            .lock()
+            .map_err(|_| alarm_dispatcher::Error::DispatcherNotAvailable)?;
+        let filter = filters
+            .get_mut(filter_name)
+            .ok_or_else(|| alarm_dispatcher::Error::AlarmFilterNotFound)?;
+        let count = filter.matching.len();
+        let (tx, rx) = oneshot::channel();
+        filter.observers.push(tx);
+        let wait_alarm = Box::pin(async {
+            rx.await
+                .map_err(|_| alarm_dispatcher::Error::DispatcherNotAvailable)
+        });
+        Ok((count as u32, wait_alarm))
+    }
+    
+    
+    
+    fn get_filter_count(&self, filter_name: &str) -> Result<u32, alarm_dispatcher::Error>
+    {
+        let mut filters = self
+            .alarm_filters
+            .lock()
+            .map_err(|_| alarm_dispatcher::Error::DispatcherNotAvailable)?;
+        let filter = filters
+            .get_mut(filter_name)
+            .ok_or_else(|| alarm_dispatcher::Error::AlarmFilterNotFound)?;
+        Ok(filter.matching.len() as u32)
+    }
+}
+
 pub fn setup_alarms(
     player_conf: &PlayerConfig,
-    playback_ctxt: &PlaybackContext,
-    action_ctxt: &ActionContext,
 ) -> DynResult<AlarmContext> {
-    let alarm_state = Vec::new();
-    let mut alarm_triggers = Vec::new();
+    let mut alarm_filters = HashMap::new();
 
+    for (name, op) in &player_conf.named_alarm_filters {
+        let filter_state =AlarmFilterState{filter: Box::new(op.clone()), matching: HashSet::new(), observers: Vec::new()};
+        alarm_filters.insert(name.to_string(), filter_state);
+    }
     let alarm_ctxt = AlarmContext {
-        alarm_state,
-        alarm_triggers,
+        alarm_filters: Mutex::new(alarm_filters),
     };
     Ok(alarm_ctxt)
 }
 
-struct StateMachineContext {
+pub struct StateMachineContext {
+    state_machines: Vec<Arc<StateMachine>>
 }
 
-fn setup_state_machines(
+impl StateMachineContext
+{
+    pub async fn start_all(&self)
+    {
+        for sm in &self.state_machines {
+            sm.goto(0).await;
+        }
+    }
+}
+pub fn setup_state_machines(
     player_conf: &PlayerConfig,
-    action_ctxt: &ActionContext,
+    playback_ctxt: &PlaybackContext,
+    tag_ctxt: &Arc<TagContext>,
+    alarm_ctxt: &Arc<AlarmContext>,
 ) -> DynResult<StateMachineContext> {
-    Ok(StateMachineContext {})
+    let mut state_machines = Vec::new();
+    let mut state_machine_map = HashMap::new();
+    for state_machine_conf in &player_conf.state_machines {
+        let state_machine = StateMachine::new(&state_machine_conf.id);
+        for state_conf in &state_machine_conf.states {            
+            state_machine.add_state(&state_conf.id);
+            debug!("Added: {}:{}", state_machine_conf.id, state_conf.id);
+        }
+        state_machine_map.insert(state_machine_conf.id.to_string(), state_machine);
+    }
+    
+    for state_machine_conf in &player_conf.state_machines {
+        let state_machine = state_machine_map.get(&state_machine_conf.id).unwrap();
+        for state_conf in &state_machine_conf.states {            
+            let state_index = state_machine.find_state_index(&state_conf.id).unwrap();
+            let action_conf = &state_conf.action;
+            //let named_actions = &action_ctxt.actions;
+            let build_data = ActionBuildData {
+                playback_ctxt, 
+                tag_ctxt, alarm_ctxt,state_machine_map: &state_machine_map, current_state_machine: state_machine
+            };
+            let action =  action_conf_to_action(&build_data, action_conf)?;
+            state_machine.set_action(state_index, action);
+            state_machines.push(state_machine.clone());
+                
+        }
+    }
+    Ok(StateMachineContext {state_machines})
 }

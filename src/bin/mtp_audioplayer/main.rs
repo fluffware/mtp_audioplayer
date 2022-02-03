@@ -1,12 +1,11 @@
 use log::{debug, error, info, warn};
-use mtp_audioplayer::app_config::{self, AlarmContext, TagContext};
+use mtp_audioplayer::app_config::{self, AlarmContext, TagContext, StateMachineContext};
 use mtp_audioplayer::open_pipe::alarm_data::AlarmData;
 use mtp_audioplayer::open_pipe::connection as open_pipe;
 use mtp_audioplayer::read_config::{self, PlayerConfig};
 use std::collections::HashMap;
 use std::env;
 use std::ffi::OsStr;
-use std::fs::File;
 use std::path::Path;
 use std::sync::Arc;
 use tokio::signal;
@@ -93,7 +92,7 @@ async fn handle_msg(
     pipe: &mut open_pipe::Connection,
     msg: &open_pipe::Message,
     tag_ctxt: &Arc<TagContext>,
-    alarm_ctxt: &mut AlarmContext,
+    alarm_ctxt: &Arc<AlarmContext>,
 ) -> Result<()> {
     let set_tags = Vec::<WriteTagValue>::new();
     match &msg.message {
@@ -106,7 +105,7 @@ async fn handle_msg(
             for notify_alarm in &notify.params.alarms {
                 debug!("Received alarm: {:?}", notify_alarm);
                 let alarm_data = AlarmData::from(notify_alarm.clone());
-                if let Err(e) = alarm_ctxt.handle_notification(alarm_data) {
+                if let Err(e) = alarm_ctxt.handle_notification(&alarm_data) {
                     error!("Failed to handle alarm notification: {}", e);
                 }
             }
@@ -121,7 +120,7 @@ async fn handle_msg(
     Ok(())
 }
 
-fn read_configuration(path: &Path) -> Result<(PlayerConfig, Arc<TagContext>, AlarmContext)> {
+fn read_configuration(path: &Path) -> Result<(PlayerConfig, Arc<TagContext>, Arc<AlarmContext>, StateMachineContext)> {
     let app_conf = read_config::read_file(path)?;
     let base_dir = Path::new(path)
         .parent()
@@ -130,9 +129,10 @@ fn read_configuration(path: &Path) -> Result<(PlayerConfig, Arc<TagContext>, Ala
     let playback_ctxt = app_config::setup_clip_playback(&app_conf, base_dir)?;
     let tag_ctxt = app_config::setup_tags(&app_conf)?;
     let tag_ctxt = Arc::new(tag_ctxt);
-    let action_ctxt = app_config::setup_actions(&app_conf, &playback_ctxt, &tag_ctxt)?;
-    let alarm_ctxt = app_config::setup_alarms(&app_conf, &playback_ctxt, &action_ctxt)?;
-    Ok((app_conf, tag_ctxt, alarm_ctxt))
+    let alarm_ctxt = app_config::setup_alarms(&app_conf)?;
+    let alarm_ctxt = Arc::new(alarm_ctxt);
+    let state_machine_ctxt = app_config::setup_state_machines(&app_conf, &playback_ctxt, &tag_ctxt, &alarm_ctxt)?;
+    Ok((app_conf, tag_ctxt, alarm_ctxt, state_machine_ctxt))
 }
 
 #[tokio::main]
@@ -146,7 +146,7 @@ async fn main() {
         OsStr::new(DEFAULT_CONFIG_FILE).to_os_string()
     };
 
-    let (app_conf, mut tag_ctxt, mut alarm_ctxt) =
+    let (app_conf, mut tag_ctxt, mut alarm_ctxt, state_machine_ctxt) =
         match read_configuration(Path::new(&conf_path_str)) {
             Ok(ctxt) => ctxt,
             Err(e) => {
@@ -166,6 +166,9 @@ async fn main() {
         }
         Ok(c) => c,
     };
+
+    state_machine_ctxt.start_all().await;
+    
     let mut tag_names: Vec<String> = tag_ctxt.tag_names();
     match subscribe_tags(&mut pipe, &mut tag_names).await {
         Err(e) => {
@@ -191,7 +194,7 @@ async fn main() {
         }
         Ok(alarms) => {
             for alarm_data in alarms {
-                if let Err(e) = alarm_ctxt.handle_notification(alarm_data) {
+                if let Err(e) = alarm_ctxt.handle_notification(&alarm_data) {
                     error!("Failed to handle alarm notification: {}", e);
                 }
             }
@@ -215,7 +218,7 @@ async fn main() {
                     Ok(msg) => {
                         if let Err(e) =
                             handle_msg(&mut pipe, &msg,
-                                       &tag_ctxt, &mut alarm_ctxt).await {
+                                       &tag_ctxt, &alarm_ctxt).await {
                                 error!("Failed to handle Open Pipe message: {}",e);
                                 return;
                             }

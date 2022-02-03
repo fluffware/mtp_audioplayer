@@ -28,8 +28,10 @@
     <tag>SoundInc</tag>
     <tag>SoundExe</tag>
     <tag>SoundDec</tag>
+    <tag>SoundTimer</tag>
     <tag>AlarmProfile</tag>
     <tag>AlarmProfile</tag>
+    <tag>Tag1</tag>
     <!--
 	<toggle tag="AlarmRestart">
 	<alarm_restart/>
@@ -56,85 +58,13 @@
     </filter>
   </alarms>
 
-  <actions>
-    <play id="Dec">SoundDec</play>
-    <play id="Inc">SoundInc</play>
-    <play id="Alarm">SoundAlarm</play>
-    <play id="Info">SoundInfo</play>
-    <sequence id="Seq">
-      <play id="Dec">SoundDec</play>
-      <wait>0.3s</wait>
-      <play id="Inc">SoundInc</play>
-    </sequence>
-    <sequence id="Blipp">
-      <repeat>
-	<play>A</play>
-	<wait>0.1s</wait>
-	<play>B</play>
-	<wait>1s</wait>
-      </repeat>
-    </sequence>
-    <sequence id="Blipp3">
-      <repeat count ="3">
-	<play>A</play>
-	<wait>0.1s</wait>
-	<play>B</play>
-	<wait>1s</wait>
-      </repeat>
-    </sequence>
-    <sequence id="RefBlipp">
-      <action use="Blipp3"/>
-    </sequence>
-    <parallel id="ParWait">
-      <play timeout="2.1s">SoundAlarm</play>
-      <play timeout="2.1s">SoundInc</play>
-    </parallel>
-    <parallel id="ParNoWait">
-      <play timeout="0s">B</play>
-      <play timeout="0s">A</play>
-    </parallel>
-    <parallel id="ParPriority">
-      <sequence>
-	<wait>1s</wait>
-	<play priority="1">SoundInfo</play>
-      </sequence>
-      <sequence>
-	<play priority="2">SoundAlarm</play>
-	<wait>1s</wait>
-	<play priority="2">SoundAlarm</play>
-      </sequence>
-    </parallel>
-    <sequence id="AlarmRepeat">
-      <repeat>
-	<repeat count="20">
-	  <play>A</play>
-	  <wait>0.5s</wait>
-	</repeat>
-	<wait>10s</wait>
-      </repeat>
-    </sequence>
-    <sequence id="AlarmDelayed">
-      <repeat>
-	<wait>5s</wait>
-	<repeat count="20">
-	  <play>C</play>
-	  <wait>0.5s</wait>
-	</repeat>
-      </repeat>
-    </sequence>
-
-    <sequence id="AlarmOnce">
-      <play>SoundAlarm</play>
-    </sequence>
-    <sequence id="InfoOnce">
-      <play>SoundInfo</play>
-    </sequence>
-  </actions>
-  
   <state_machine id="main">
     <state id="start">
       <repeat>
+	<debug>Tag test started</debug>
+	<play>C</play>
 	<wait_tag eq="1">Tag1</wait_tag>
+	<play>A</play>
 	<debug>Tag1=1</debug>
 	<wait_tag eq="0">Tag1</wait_tag>
 	<debug>Tag1=0</debug>
@@ -143,5 +73,39 @@
       </repeat>
     </state>
   </state_machine>
-  
+  <state_machine id = "toggled">
+    <state id="start">
+      <repeat>
+	<wait_tag changed="1">SoundExe</wait_tag>
+	<play>A</play>
+      </repeat>
+      <repeat>
+	<wait_tag changed="1">SoundInc</wait_tag>
+	<play>F</play>
+      </repeat>
+      <repeat>
+	<wait_tag changed="1">SoundDec</wait_tag>
+	<play>C#</play>
+      </repeat>
+    </state>
+  </state_machine>
+  <state_machine id="beep">
+    <state id="start">
+      <sequence>
+	<wait_tag eq="1">SoundTimer</wait_tag>
+	<goto>beep</goto>
+      </sequence>
+    </state>
+    <state id="beep">
+      <sequence>
+	<wait_tag eq="0">SoundTimer</wait_tag>
+	<goto>start</goto>
+      </sequence>
+      <repeat>
+	<play>A</play>
+	<play>B</play>
+	<wait>0.5s</wait>
+      </repeat>
+    </state>
+  </state_machine>
 </audioplayer>

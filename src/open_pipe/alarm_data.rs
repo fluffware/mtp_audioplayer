@@ -16,13 +16,6 @@ pub struct AlarmData {
     pub modification_time: DateTime<Utc>,
 }
 
-impl AlarmData {
-    pub fn cmp_id(&self, other: &Self) -> Ordering {
-        self.id
-            .cmp(&other.id)
-    }
-}
-
 impl From<NotifyAlarm> for AlarmData {
     fn from(notify: NotifyAlarm) -> AlarmData {
         let modification_time = match NaiveDateTime::parse_from_str(
@@ -90,22 +83,20 @@ impl From<&AlarmData> for NotifyAlarm {
     }
 }
 
-/*
-impl Into<NotifyAlarm> for AlarmData {
-    fn into(self) -> NotifyAlarm {
-    NotifyAlarm{
-        name: self.name,
-        id: self.id.to_string(),
-        alarm_class_name: self.alarm_class_name,
-        alarm_class_symbol: self.alarm_class_symbol,
-        event_text: self.event_text,
-        instance_id: self.instance_id.to_string(),
-        priority: self.priority.to_string(),
-        state: self.state.to_string(),
-        state_text: self.state_text,
-        state_machine: self.state_machine.to_string(),
-        modification_time: "".to_string(),
-    }
+/// Contains the parts from AlarmData that uniquely identifies an alarm
+#[derive(PartialEq, Eq, Hash, Ord)]
+pub struct AlarmId {
+    pub id: i32,
+}
+
+impl PartialOrd for AlarmId {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.id.partial_cmp(&other.id)
     }
 }
-*/
+
+impl From<&AlarmData> for AlarmId {
+    fn from(alarm: &AlarmData) -> AlarmId {
+        AlarmId { id: alarm.id }
+    }
+}

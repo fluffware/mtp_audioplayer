@@ -1,4 +1,4 @@
-use super::alarm_data::AlarmData;
+use super::alarm_data::{AlarmData, AlarmId};
 use super::connection::{
     ErrorInfo, Message, MessageVariant, NotifyAlarm, NotifyAlarms, ParamWrapperCap,
     SubscribeAlarmParams,
@@ -135,7 +135,7 @@ impl AlarmServer {
             }
         }
         for alarm in alarms {
-            match self.alarms.binary_search_by(|a| a.cmp_id(&alarm)) {
+            match self.alarms.binary_search_by(|a| AlarmId::from(a).cmp(&AlarmId::from(&alarm))) {
                 Ok(p) => {
                     if alarm.state != 128 {
                         self.alarms[p].state = alarm.state;

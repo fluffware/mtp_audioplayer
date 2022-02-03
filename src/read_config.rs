@@ -1,4 +1,5 @@
 use crate::actions::wait_tag::TagCondition;
+use crate::actions::wait_alarm::AlarmCondition;
 use crate::alarm_filter;
 use roxmltree::{Document, Node, TextPos};
 use std::collections::HashMap;
@@ -85,14 +86,17 @@ pub enum ActionType {
         tag_name: String,
         condition: TagCondition,
     },
+    WaitAlarm {
+        filter_name: String,
+        condition: AlarmCondition
+    },
     Debug(String),
-    Reference(String),
     // No count means forever.
     Repeat {
         count: Option<NonZeroU32>,
         action: Box<ActionType>,
     },
-    AlarmRestart,
+    Goto(String),
 }
 
 #[derive(Debug)]
@@ -115,7 +119,6 @@ pub struct PlayerConfig {
     pub channels: u8,
     pub clip_root: String,
     pub clips: HashMap<String, ClipType>,
-    pub named_actions: Vec<(String, ActionType)>,
     pub tags: Vec<String>,
     pub named_alarm_filters: HashMap<String, alarm_filter::BoolOp>,
     pub state_machines: Vec<StateMachineConfig>,
@@ -251,15 +254,12 @@ fn parse_action(node: &Node) -> DynResult<ActionType> {
 	"wait_tag" => {
 	    action = parse_wait_tag(node)?;
 	}
-        "alarm_restart" => {
-            action = ActionType::AlarmRestart;
+        "goto" => {
+            action = parse_goto(node)?;
         }
         "repeat" => {
             action = parse_repeat(node)?;
         }
-        "action" => {
-            action = parse_action_ref(node)?;
-        },
 	"debug" => {
 	    action = parse_debug(node)?;
 	}
@@ -287,12 +287,12 @@ fn parse_wait(node: &Node) -> DynResult<ActionType> {
     Ok(ActionType::Wait(parse_duration(&time_str)?))
 }
 
-const ConditionAttributes: &[&str] = &["eq","ne","lt","le", "gt", "ge", "eq_str", "ne_str"];
+const CONDITION_ATTRIBUTES: &[&str] = &["eq","ne","lt","le", "gt", "ge", "eq_str", "ne_str"];
 fn set_tag_condition(node: &Node, var: &mut Option<TagCondition>, cond: TagCondition)
     -> DynResult<()>
 {
     if var.is_some() {
-	return Err(ConfigError::new(node, ExclusiveAttributes(ConditionAttributes)).into())
+	return Err(ConfigError::new(node, ExclusiveAttributes(CONDITION_ATTRIBUTES)).into())
     }
     *var = Some(cond);
     Ok(())
@@ -322,12 +322,13 @@ fn parse_wait_tag(node: &Node) -> DynResult<ActionType> {
      if let Some(v) = optional_attribute::<String>(&node, "eq_str")? {
 	set_tag_condition(node, &mut condition, TagCondition::EqualString(v))?;
      }
-     if let Some(v) = optional_attribute::<String>(&node, "ne_str")? {
-	set_tag_condition(node, &mut condition, TagCondition::NotEqualString(v))?;
-     }
+    if let Some(_) = optional_attribute::<String>(&node, "changed")? {
+	set_tag_condition(node, &mut condition, TagCondition::Changed)?;
+    }
+    
     let condition = match condition {
 	Some(cond) => cond,
-	None => return Err(ConfigError::new(node, ExclusiveAttributes(ConditionAttributes)).into())
+	None => return Err(ConfigError::new(node, ExclusiveAttributes(CONDITION_ATTRIBUTES)).into())
     };
 	
     
@@ -336,6 +337,23 @@ fn parse_wait_tag(node: &Node) -> DynResult<ActionType> {
     Ok(ActionType::WaitTag{tag_name, condition})
 }
 
+fn parse_wait_alarm(node: &Node) -> DynResult<ActionType> {
+    let filter_name = text_content(&node)?;
+    let count = required_attribute::<String>(&node, "count")?;
+    let condition = match count.as_str() {
+        "none" => AlarmCondition::None,
+        "any" => AlarmCondition::Any,
+        "inc" => AlarmCondition::Inc,
+        "dec" => AlarmCondition::Dec,
+        _ => return Err(ConfigError::new(&node, ParseAttribute("count".to_string(), "Must be one of 'none', 'any', 'inc' or 'dec'".into())).into())
+    };
+    Ok(ActionType::WaitAlarm{filter_name, condition})
+}
+
+fn parse_goto(node: &Node) -> DynResult<ActionType> {        
+    let state_name = text_content(&node)?;
+    Ok(ActionType::Goto(state_name))
+}
 
 fn parse_repeat(node: &Node) -> DynResult<ActionType> {
     let count = optional_attribute(&node, "count")?;
@@ -382,25 +400,9 @@ fn parse_parallel(parent: &Node) -> DynResult<ActionType> {
     }
 }
 
-fn parse_action_ref(node: &Node) -> DynResult<ActionType> {
-    let action_ref: String = required_attribute(node, "use")?;
-    Ok(ActionType::Reference(action_ref))
-}
-
 fn parse_debug(node: &Node) -> DynResult<ActionType> {
     let text = text_content(&node)?;
     Ok(ActionType::Debug(text))
-}
-
-fn parse_actions(parent: &Node, actions: &mut Vec<(String, ActionType)>) -> DynResult<()> {
-    for child in parent.children() {
-        if check_element_ns(&child)? {
-            let id = required_attribute(&child, "id")?;
-            let action = parse_action(&child)?;
-            actions.push((id, action));
-        }
-    }
-    Ok(())
 }
 
 fn parse_tag(node: &Node) -> DynResult<String> {
@@ -423,28 +425,11 @@ fn parse_tags(parent: &Node) -> DynResult<Vec<String>> {
     Ok(tags)
 }
 
-#[derive(Debug, Copy, Clone)]
-pub enum AlarmTriggerType {
-    WhileAnyActive,
-    WhileNoneActive,
-    WhenRaised,
-    WhenFirstRaised,
-    WhenCleared,
-    WhenLastCleared,
-}
-
-#[derive(Debug)]
-pub struct AlarmTriggerConfig {
-    pub trigger_type: AlarmTriggerType,
-    pub filter_id: String,
-    pub action: ActionType,
-}
 
 fn parse_alarms(
     parent: &Node,
     named_filters: &mut HashMap<String, alarm_filter::BoolOp>,
 ) -> DynResult<()> {
-    let mut named_filters: HashMap<String, alarm_filter::BoolOp> = HashMap::new();
     for child in parent.children() {
         if check_element_ns(&child)? {
             match child.tag_name().name() {
@@ -536,12 +521,9 @@ fn check_element_ns(node: &Node) -> Result<bool, ConfigError> {
     }
     Ok(false)
 }
-pub fn read_file<P: AsRef<Path>>(path: P) -> DynResult<PlayerConfig> {
-    let mut file = File::open(path)?;
-    let mut file_content = String::new();
-    file.read_to_string(&mut file_content)?;
-    let document = Document::parse(&file_content)?;
 
+pub fn read_str(input: &str) -> DynResult<PlayerConfig> {
+    let document = Document::parse(&input)?;
     let mut player = PlayerConfig {
         bind: "/tmp/siemens/automation/HmiRunTime".to_string(),
         playback_device: "".to_string(),
@@ -549,7 +531,6 @@ pub fn read_file<P: AsRef<Path>>(path: P) -> DynResult<PlayerConfig> {
         channels: 2,
         clip_root: String::new(),
         clips: HashMap::new(),
-        named_actions: Vec::new(),
         tags: Vec::new(),
         named_alarm_filters: HashMap::new(),
         state_machines: Vec::new(),
@@ -573,9 +554,6 @@ pub fn read_file<P: AsRef<Path>>(path: P) -> DynResult<PlayerConfig> {
                     player.clip_root = required_attribute(&node, "path")?;
                     player.clips = parse_clips(&node)?;
                 }
-                "actions" => {
-                    parse_actions(&node, &mut player.named_actions)?;
-                }
                 "tags" => {
                     player.tags = parse_tags(&node)?;
                 }
@@ -593,14 +571,20 @@ pub fn read_file<P: AsRef<Path>>(path: P) -> DynResult<PlayerConfig> {
     Ok(player)
 }
 
+pub fn read_file<P: AsRef<Path>>(path: P) -> DynResult<PlayerConfig> {
+    let mut file = File::open(path)?;
+    let mut file_content = String::new();
+    file.read_to_string(&mut file_content)?;
+    read_str(&file_content)
+}
+
 #[test]
 fn test_parser() {
-    let doc = r#"
-<?xml version="1.0" encoding="UTF-8"?>
+    let doc = r#"<?xml version="1.0" encoding="UTF-8"?>
 <audioplayer xmlns="http://www.elektro-kapsel.se/audioplayer/v1">
   <bind>/tmp/siemens/automation/HmiRunTime</bind>
   <playback_device rate="44100" channels="2">plughw:SoundBar</playback_device>
-  <clips> 
+  <clips path="/"> 
     <file id="SoundAlarm">Alarm.wav</file>
     <file id="SoundInfo">Info.wav</file>
     <file id="SoundAccept">Knapp4.wav</file>
@@ -609,37 +593,7 @@ fn test_parser() {
     <file id="SoundDec">Knapp4.wav</file>
   </clips>
   <tags>
-    <toggle tag="SoundAlarm">
-      <play>SoundAlarm</play>
-    </toggle>
-    <toggle tag="SoundInc">
-      <play>SoundInfo</play>
-    </toggle>
-    <toggle tag="SoundExe">
-      <play>SoundExe</play>
-    </toggle>
-    <toggle tag="SoundDec">
-      <play>SoundInc</play>
-    </toggle>
-    <toggle tag="SoundDec">
-      <play>SoundInc</play>
-    </toggle>
-    <toggle tag="AlarmRestart">
-      <alarm_restart/>
-    </toggle>
-    <equals tag="AlarmProfile" value="0">
-      <set_profile>Normal</set_profile>
-    </equals>
-    <equals tag="AlarmProfile" value="1">
-      <set_profile>Operation</set_profile>
-    </equals>
-    <toggle tag="SequenceTest">
-      <play>SoundExe</play>
-      <wait>3s</wait>
-      <repeat count="3">
-        <play>SoundInc</play>
-      </repeat>
-    </toggle>
+    <tag>SoundAlarm</tag>
   </tags>
   <actions>
     <sequence id="AlarmRepeat">
@@ -667,31 +621,7 @@ fn test_parser() {
       <play>SoundInfo</play>
     </sequence>
   </actions> 
-  <alarms>
-    <filter id="AlarmsUnacked">
-      AlarmClassName = 'Larm' AND State = 'in' AND State = 'in out'
-    </filter>
-    <filter id="AlarmsRaised">
-      AlarmClassName = 'Larm' AND State = 'in' AND State = 'in ack'
-    </filter>
-    <filter id="Warnings">
-      AlarmClassName = 'Varning' AND State = 'in' AND State = 'in ack'
-    </filter>
-      
-    <profile id="Normal">
-      <while filter="AlarmUnacked">
-	<action use="AlarmRepeat"/>
-      </while>
-      <while filter="AlarmsRaised">
-	<action use="AlarmDelayed"/>
-      </while>
-	
-      <when filter="Varning" event="raised">
-	<action use="AlarmDelayed"/>
-      </when>
-    </profile>
-  </alarms>
 </audioplayer>
 "#;
-    read_file(str::as_bytes(doc)).unwrap();
+    read_str(&doc).unwrap();
 }
