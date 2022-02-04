@@ -11,18 +11,15 @@ use mtp_audioplayer::open_pipe::{
 };
 use serde_json;
 use std::sync::{Arc, Mutex, Weak};
-use tokio::pin;
 use tokio::signal;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::time::{timeout, Duration};
 use tokio_util::sync::CancellationToken;
-use warp::filters::BoxedFilter;
-use warp::reject::Rejection;
 use warp::ws::Message as WsMessage;
 use warp::{Filter, Reply};
 use std::net::IpAddr;
 use std::env;
-use std::path::{Path, PathBuf};
+use std::path::{PathBuf};
 
 pub type DynResult<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync + 'static>>;
 

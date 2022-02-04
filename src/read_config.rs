@@ -1,5 +1,5 @@
-use crate::actions::wait_tag::TagCondition;
 use crate::actions::wait_alarm::AlarmCondition;
+use crate::actions::wait_tag::TagCondition;
 use crate::alarm_filter;
 use roxmltree::{Document, Node, TextPos};
 use std::collections::HashMap;
@@ -33,7 +33,11 @@ impl std::fmt::Display for ConfigErrorKind {
             UnexpectedText => write!(f, "Unexpected non-whitespace text"),
             UnexpectedAttribute => write!(f, "Unexpected attribute"),
             MissingAttribute(name) => write!(f, "Missing attribute '{}'", name),
-	    ExclusiveAttributes(attrs) => write!(f, "Exactly one of the attributes '{}' is required", attrs.join("', '")),
+            ExclusiveAttributes(attrs) => write!(
+                f,
+                "Exactly one of the attributes '{}' is required",
+                attrs.join("', '")
+            ),
             ParseAttribute(name, err) => write!(f, "Failed to parse attribute '{}': {}", name, err),
             ParseFilter(err) => write!(f, "Failed to parse alarm filter: {}", err),
         }
@@ -88,7 +92,7 @@ pub enum ActionType {
     },
     WaitAlarm {
         filter_name: String,
-        condition: AlarmCondition
+        condition: AlarmCondition,
     },
     Debug(String),
     // No count means forever.
@@ -97,6 +101,10 @@ pub enum ActionType {
         action: Box<ActionType>,
     },
     Goto(String),
+    SetTag {
+        tag_name: String,
+        value: String
+    },
 }
 
 #[derive(Debug)]
@@ -251,18 +259,25 @@ fn parse_action(node: &Node) -> DynResult<ActionType> {
         "wait" => {
             action = parse_wait(node)?;
         }
-	"wait_tag" => {
-	    action = parse_wait_tag(node)?;
-	}
+        "wait_tag" => {
+            action = parse_wait_tag(node)?;
+        }
+        "wait_alarm" => {
+            action = parse_wait_alarm(node)?;
+        }
+
         "goto" => {
             action = parse_goto(node)?;
         }
         "repeat" => {
             action = parse_repeat(node)?;
         }
-	"debug" => {
-	    action = parse_debug(node)?;
-	}
+        "set_tag" => {
+            action = parse_set_tag(node)?;
+        }
+        "debug" => {
+            action = parse_debug(node)?;
+        }
         _ => return Err(ConfigError::new(&node, UnexpectedElement).into()),
     }
     Ok(action)
@@ -287,54 +302,59 @@ fn parse_wait(node: &Node) -> DynResult<ActionType> {
     Ok(ActionType::Wait(parse_duration(&time_str)?))
 }
 
-const CONDITION_ATTRIBUTES: &[&str] = &["eq","ne","lt","le", "gt", "ge", "eq_str", "ne_str"];
-fn set_tag_condition(node: &Node, var: &mut Option<TagCondition>, cond: TagCondition)
-    -> DynResult<()>
-{
+const CONDITION_ATTRIBUTES: &[&str] = &["eq", "ne", "lt", "le", "gt", "ge", "eq_str", "ne_str"];
+fn set_tag_condition(
+    node: &Node,
+    var: &mut Option<TagCondition>,
+    cond: TagCondition,
+) -> DynResult<()> {
     if var.is_some() {
-	return Err(ConfigError::new(node, ExclusiveAttributes(CONDITION_ATTRIBUTES)).into())
+        return Err(ConfigError::new(node, ExclusiveAttributes(CONDITION_ATTRIBUTES)).into());
     }
     *var = Some(cond);
     Ok(())
 }
-    
-fn parse_wait_tag(node: &Node) -> DynResult<ActionType> {
 
+fn parse_wait_tag(node: &Node) -> DynResult<ActionType> {
     let mut condition = None;
     if let Some(v) = optional_attribute::<f64>(&node, "eq")? {
-	set_tag_condition(node, &mut condition, TagCondition::EqualNumber(v))?;
+        set_tag_condition(node, &mut condition, TagCondition::EqualNumber(v))?;
     }
     if let Some(v) = optional_attribute::<f64>(&node, "ne")? {
-	set_tag_condition(node, &mut condition, TagCondition::NotEqualNumber(v))?;
+        set_tag_condition(node, &mut condition, TagCondition::NotEqualNumber(v))?;
     }
-     if let Some(v) = optional_attribute::<f64>(&node, "lt")? {
-	set_tag_condition(node, &mut condition, TagCondition::Less(v))?;
-     }
-     if let Some(v) = optional_attribute::<f64>(&node, "le")? {
-	set_tag_condition(node, &mut condition, TagCondition::LessEqual(v))?;
-     }
-     if let Some(v) = optional_attribute::<f64>(&node, "gt")? {
-	set_tag_condition(node, &mut condition, TagCondition::Greater(v))?;
-     }
-     if let Some(v) = optional_attribute::<f64>(&node, "ge")? {
-	set_tag_condition(node, &mut condition, TagCondition::GreaterEqual(v))?;
-     }
-     if let Some(v) = optional_attribute::<String>(&node, "eq_str")? {
-	set_tag_condition(node, &mut condition, TagCondition::EqualString(v))?;
-     }
+    if let Some(v) = optional_attribute::<f64>(&node, "lt")? {
+        set_tag_condition(node, &mut condition, TagCondition::Less(v))?;
+    }
+    if let Some(v) = optional_attribute::<f64>(&node, "le")? {
+        set_tag_condition(node, &mut condition, TagCondition::LessEqual(v))?;
+    }
+    if let Some(v) = optional_attribute::<f64>(&node, "gt")? {
+        set_tag_condition(node, &mut condition, TagCondition::Greater(v))?;
+    }
+    if let Some(v) = optional_attribute::<f64>(&node, "ge")? {
+        set_tag_condition(node, &mut condition, TagCondition::GreaterEqual(v))?;
+    }
+    if let Some(v) = optional_attribute::<String>(&node, "eq_str")? {
+        set_tag_condition(node, &mut condition, TagCondition::EqualString(v))?;
+    }
     if let Some(_) = optional_attribute::<String>(&node, "changed")? {
-	set_tag_condition(node, &mut condition, TagCondition::Changed)?;
+        set_tag_condition(node, &mut condition, TagCondition::Changed)?;
     }
-    
+
     let condition = match condition {
-	Some(cond) => cond,
-	None => return Err(ConfigError::new(node, ExclusiveAttributes(CONDITION_ATTRIBUTES)).into())
+        Some(cond) => cond,
+        None => {
+            return Err(ConfigError::new(node, ExclusiveAttributes(CONDITION_ATTRIBUTES)).into())
+        }
     };
-	
-    
+
     let tag_name = text_content(&node)?;
 
-    Ok(ActionType::WaitTag{tag_name, condition})
+    Ok(ActionType::WaitTag {
+        tag_name,
+        condition,
+    })
 }
 
 fn parse_wait_alarm(node: &Node) -> DynResult<ActionType> {
@@ -345,12 +365,24 @@ fn parse_wait_alarm(node: &Node) -> DynResult<ActionType> {
         "any" => AlarmCondition::Any,
         "inc" => AlarmCondition::Inc,
         "dec" => AlarmCondition::Dec,
-        _ => return Err(ConfigError::new(&node, ParseAttribute("count".to_string(), "Must be one of 'none', 'any', 'inc' or 'dec'".into())).into())
+        _ => {
+            return Err(ConfigError::new(
+                &node,
+                ParseAttribute(
+                    "count".to_string(),
+                    "Must be one of 'none', 'any', 'inc' or 'dec'".into(),
+                ),
+            )
+            .into())
+        }
     };
-    Ok(ActionType::WaitAlarm{filter_name, condition})
+    Ok(ActionType::WaitAlarm {
+        filter_name,
+        condition,
+    })
 }
 
-fn parse_goto(node: &Node) -> DynResult<ActionType> {        
+fn parse_goto(node: &Node) -> DynResult<ActionType> {
     let state_name = text_content(&node)?;
     Ok(ActionType::Goto(state_name))
 }
@@ -399,6 +431,11 @@ fn parse_parallel(parent: &Node) -> DynResult<ActionType> {
         Ok(ActionType::Parallel(actions))
     }
 }
+fn parse_set_tag(node: &Node) -> DynResult<ActionType> {
+    let tag_name = required_attribute(node, "tag")?;
+    let value = text_content(&node)?;
+    Ok(ActionType::SetTag{tag_name, value})
+}
 
 fn parse_debug(node: &Node) -> DynResult<ActionType> {
     let text = text_content(&node)?;
@@ -425,7 +462,6 @@ fn parse_tags(parent: &Node) -> DynResult<Vec<String>> {
     Ok(tags)
 }
 
-
 fn parse_alarms(
     parent: &Node,
     named_filters: &mut HashMap<String, alarm_filter::BoolOp>,
@@ -444,9 +480,11 @@ fn parse_alarms(
                                 Some(ref node) => node,
                                 None => &child,
                             };
-                            return Err(
-                                ConfigError::new(text_node_ref, ParseFilter(e.to_string().into())).into()
-                            );
+                            return Err(ConfigError::new(
+                                text_node_ref,
+                                ParseFilter(e.to_string().into()),
+                            )
+                            .into());
                         }
                     };
                     named_filters.insert(filter_id, op);

@@ -270,8 +270,6 @@ impl Display for FilterError<'_> {
     }
 }
 
-
-
 impl<'a> nom::error::ParseError<&'a str> for FilterError<'a> {
     fn from_error_kind(input: &'a str, kind: nom::error::ErrorKind) -> Self {
         FilterError {
@@ -522,10 +520,7 @@ pub fn parse_filter<'a>(input: &'a str) -> Result<BoolOp, FilterError<'a>> {
 #[test]
 fn test_criterion_parser() {
     assert_eq!(
-        string_criterion("Name!='djkss'")
-            .unwrap()
-            .1
-            .to_string(),
+        string_criterion("Name!='djkss'").unwrap().1.to_string(),
         "NOT (Name = 'djkss')"
     );
     assert_eq!(
@@ -659,24 +654,24 @@ fn test_filter_parser_failure() {
 }
 
 #[test]
-fn test_filter_evaluate()
-{
+fn test_filter_evaluate() {
     let alarm_data = AlarmData {
-	name: "Foo".to_string(),
-	id: 0,
-	alarm_class_name: "Warning".to_string(),
-	alarm_class_symbol: "W".to_string(),
-	event_text: "This is a warning".to_string(),
-	instance_id: 52,
-	priority: 7,
-	state: 1,
-	state_text:"Incoming".to_string(),
-	state_machine: 7,
-	modification_time: chrono::DateTime::parse_from_rfc3339("1988-12-09T19:23:02Z").unwrap().with_timezone(&chrono::Utc)
+        name: "Foo".to_string(),
+        id: 0,
+        alarm_class_name: "Warning".to_string(),
+        alarm_class_symbol: "W".to_string(),
+        event_text: "This is a warning".to_string(),
+        instance_id: 52,
+        priority: 7,
+        state: 1,
+        state_text: "Incoming".to_string(),
+        state_machine: 7,
+        modification_time: chrono::DateTime::parse_from_rfc3339("1988-12-09T19:23:02Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc),
     };
-	
+
     let filter_text = "Name='Foo' AND ID=0 AND InstanceID=52 AND AlarmClassName ='Warning' AND Priority=7 AND State=1";
     let filter = parse_filter(filter_text).unwrap();
     assert_eq!(filter.evaluate(&alarm_data), true);
-	
 }

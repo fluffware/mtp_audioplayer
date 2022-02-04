@@ -12,6 +12,8 @@ use crate::actions::{
     wait_tag::WaitTagAction,
     wait_alarm::WaitAlarmAction,
     goto::GotoAction,
+    tag_setter::TagSetter,
+    set_tag::SetTagAction,
 };
 use crate::alarm_filter::BoolOp as AlarmBoolOp;
 use crate::clip_queue::ClipQueue;
@@ -27,6 +29,8 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use tokio::sync::oneshot;
+use tokio::sync::mpsc::{self, UnboundedSender};
+
 
 type DynResult<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
@@ -262,6 +266,14 @@ fn action_conf_to_action(
             condition.clone(),
             build_data.alarm_ctxt.clone(),
         ))),
+        ActionType::SetTag {
+            tag_name,
+            value,
+        } => Ok(Arc::new(SetTagAction::new(
+            tag_name.clone(),
+            value.clone(),
+            build_data.tag_ctxt.clone(),
+        ))),
         ActionType::Debug(text) => Ok(Arc::new(DebugAction::new(text.clone()))),
     }
 }
@@ -274,12 +286,14 @@ struct TagObservable {
 
 pub struct TagContext {
     tags: Mutex<HashMap<String, TagObservable>>,
+    tag_send_tx: UnboundedSender<(String,String)>
 }
 
 impl TagContext {
-    pub fn new() -> TagContext {
+    pub fn new(tag_send_tx: UnboundedSender<(String,String)>) -> TagContext {
         TagContext {
             tags: Mutex::new(HashMap::new()),
+            tag_send_tx
         }
     }
 
@@ -298,6 +312,14 @@ impl TagContext {
     pub fn tag_names(&self) -> Vec<String> {
         let tags = self.tags.lock().unwrap();
         tags.keys().cloned().collect()
+    }
+}
+
+impl TagSetter for TagContext {
+    fn set_tag(&self, tag_name: &str, value: &str)
+    {
+        self.tag_changed(tag_name, value);
+        let _ = self.tag_send_tx.send((tag_name.to_string(), value.to_string()));
     }
 }
 
@@ -330,8 +352,8 @@ impl TagDispatcher for TagContext {
     }
 }
 
-pub fn setup_tags(player_conf: &PlayerConfig) -> DynResult<TagContext> {
-    let tag_ctxt = TagContext::new();
+pub fn setup_tags(player_conf: &PlayerConfig, tag_send_tx: UnboundedSender<(String,String)>) -> DynResult<TagContext> {
+    let tag_ctxt = TagContext::new(tag_send_tx);
     {
         let mut tags = tag_ctxt.tags.lock().unwrap();
         for name in &player_conf.tags {

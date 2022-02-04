@@ -108,4 +108,27 @@
       </repeat>
     </state>
   </state_machine>
+  <state_machine id="alarm">
+    <state id="no_alarms">
+      <sequence>
+	<set_tag tag="Unacked">0</set_tag>
+	<debug>No alarms</debug>
+	<wait_alarm count="any">AlarmsUnacked</wait_alarm>
+	<goto>unacked</goto>
+      </sequence>
+    </state>
+    <state id="unacked">
+      <sequence>
+	<set_tag tag="Unacked">1</set_tag>
+	<debug>Unacked</debug>
+	<wait_alarm count="none">AlarmsUnacked</wait_alarm>
+	<goto>no_alarms</goto>
+      </sequence>
+      <repeat>
+	<play>B</play>
+	<play>A</play>
+	<play>D</play>
+      </repeat>
+    </state>
+  </state_machine>
 </audioplayer>

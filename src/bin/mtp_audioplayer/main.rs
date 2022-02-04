@@ -10,7 +10,7 @@ use std::path::Path;
 use std::sync::Arc;
 use tokio::signal;
 use tokio::time::{timeout, Duration};
-
+use tokio::sync::mpsc::{self, UnboundedReceiver};
 use open_pipe::{MessageVariant, WriteTagValue};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync + 'static>>;
@@ -120,19 +120,20 @@ async fn handle_msg(
     Ok(())
 }
 
-fn read_configuration(path: &Path) -> Result<(PlayerConfig, Arc<TagContext>, Arc<AlarmContext>, StateMachineContext)> {
+fn read_configuration(path: &Path) -> Result<(PlayerConfig, Arc<TagContext>, Arc<AlarmContext>, StateMachineContext, UnboundedReceiver<(String,String)>)> {
     let app_conf = read_config::read_file(path)?;
     let base_dir = Path::new(path)
         .parent()
         .ok_or("Configuration file has no parent")?;
 
+     let (pipe_send_tx, mut pipe_send_rx) = tokio::sync::mpsc::unbounded_channel::<(String, String)>();
     let playback_ctxt = app_config::setup_clip_playback(&app_conf, base_dir)?;
-    let tag_ctxt = app_config::setup_tags(&app_conf)?;
+    let tag_ctxt = app_config::setup_tags(&app_conf, pipe_send_tx)?;
     let tag_ctxt = Arc::new(tag_ctxt);
     let alarm_ctxt = app_config::setup_alarms(&app_conf)?;
     let alarm_ctxt = Arc::new(alarm_ctxt);
     let state_machine_ctxt = app_config::setup_state_machines(&app_conf, &playback_ctxt, &tag_ctxt, &alarm_ctxt)?;
-    Ok((app_conf, tag_ctxt, alarm_ctxt, state_machine_ctxt))
+    Ok((app_conf, tag_ctxt, alarm_ctxt, state_machine_ctxt, pipe_send_rx))
 }
 
 #[tokio::main]
@@ -146,7 +147,7 @@ async fn main() {
         OsStr::new(DEFAULT_CONFIG_FILE).to_os_string()
     };
 
-    let (app_conf, mut tag_ctxt, mut alarm_ctxt, state_machine_ctxt) =
+    let (app_conf, tag_ctxt, alarm_ctxt, state_machine_ctxt, mut pipe_send_rx) =
         match read_configuration(Path::new(&conf_path_str)) {
             Ok(ctxt) => ctxt,
             Err(e) => {
@@ -200,7 +201,7 @@ async fn main() {
             }
         }
     }
-
+   
     let mut done = false;
     while !done {
         tokio::select! {
@@ -209,6 +210,16 @@ async fn main() {
                     error!("Failed to wait for ctrl-c: {}",e);
                 }
                 done = true;
+            },
+            res = pipe_send_rx.recv() => {
+                match res {
+                    Some((name, value)) => {
+                        if let Err(e) = pipe.write_tags(&[WriteTagValue{name, value}]).await {
+                            error!("Failed to write tag to pipe: {}",e);
+                        }
+                    }
+                    None => {}
+                }
             },
             res = pipe.get_message() => {
                 match res {

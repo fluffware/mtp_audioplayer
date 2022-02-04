@@ -181,6 +181,17 @@
 	  </xs:simpleContent>
 	</xs:complexType>
       </xs:element>
+
+      <xs:element name="set_tag">
+	<xs:complexType>
+	  <xs:simpleContent>
+	    <xs:extension base="xs:string">
+	      <xs:attributeGroup ref="action_id_attr"/>
+	      <xs:attribute name="tag" type="xs:string" use="required"/>
+	    </xs:extension>
+	  </xs:simpleContent>
+	</xs:complexType>
+      </xs:element>
       
     </xs:choice>
   </xs:group>

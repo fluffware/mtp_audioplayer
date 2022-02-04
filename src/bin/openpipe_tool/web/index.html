@@ -20,21 +20,23 @@
 
   <h1>Tags</h1>
   <table id="tag_list">
-    <tr>
-      <thead>
+   
+    <thead>
+      <tr>      
         <th>Name</th>
         <th>Value</th>
-      </thead>
-      <tbody>
-
-      </tbody>
-    </tr>
+      <tr>
+    </thead>
+    <tbody>
+      
+    </tbody>
   </table>
   <input id="subscribe_list" type="text" onchange="tag_list.subscribe(this.value)">
   <input type="button" value="Subcribe tags" onclick="tag_list.subscribe(document.getElementById('subscribe_list').value)">
 
   <h1>Alarms</h1>
   <table id="alarm_list">
+    <thead>
     <tr>
       <th>ID</th>
       <th>InstanceID</th>
@@ -47,6 +49,22 @@
       <th>Priotity</th>
       <th>State</th>
     </tr>
+    </thead>
+    <tbody>
+    </tbody>
+    <tfoot>
+      <td><input id="new_alarm_id" type="text" value="1" size="5"></td>
+      <td><input id="new_instance_id" type="text" value="1" size="5"></td>
+      <td><input id="new_alarm_name" type="text" value="Alarm name"></td>
+      <td><input id="new_alarm_class" type="text" value="Alarm" size="10"></td>
+      <td><input id="new_alarm_symbol" type="text" value="A" size="10"></td>
+      <td><input id="new_state_text" type="text" value="Normal" size="15"></td>
+      <td><input id="new_state_machine" type="text" value="7" size="2"></td>
+      <td><input id="new_event_text" type="text" value="Alarm active"></td>
+      <td><input id="new_priority" type="text" value="10" size="2"></td>
+      <td><input id="new_state" type="text" value="0" size="2"></td>
+      <td><input id="add_alarm" type="button" value="Add" onclick="alarm_list.add_alarm()">
+    </tfoot>
   </table>
 </body>
 

@@ -45,15 +45,16 @@ class AlarmList
 
     }
     
-    build_list(tags) {
-	let table = this.table_elem;
-	this.update_list(tags);
+    build_list(alarms) {
+	let table = this.table_elem.getElementsByTagName("tbody")[0];
+	table.innerHTML = '';
+	this.update_list(alarms);
     }
     
     update_list(alarms)
     {
+	let table = this.table_elem.getElementsByTagName("tbody")[0];
 	for (let a of alarms) {
-	    let table = this.table_elem;
 	    let row = table.querySelector("tr[alarm_id='"+a.ID+"']");
 	    if (row) {
 			if (a.State != 128) {
@@ -124,5 +125,33 @@ class AlarmList
 		});
 	    }
 	}
+    }
+
+    add_alarm()
+    {
+	let iso_date = (new Date()).toISOString();
+	let date = iso_date.slice(0,10) + " " + iso_date.slice(11, 19);
+	let msg = {
+	    Message: "NotifySubscribeAlarm",
+	    Params: {
+		Alarms: [{
+		    ID: document.getElementById("new_alarm_id").value,
+		    InstanceID: document.getElementById("new_instance_id").value,
+		    Name: document.getElementById("new_alarm_name").value,
+		    AlarmClassName: document.getElementById("new_alarm_class").value,
+		    AlarmClassSymbol: document.getElementById("new_alarm_symbol").value,
+		    StateText: document.getElementById("new_state_text").value,
+		    StateMachine: document.getElementById("new_state_machine").value,
+		    EventText: document.getElementById("new_event_text").value,
+		    StateText: document.getElementById("new_state_text").value,
+		    Priority: document.getElementById("new_priority").value,
+		    State: document.getElementById("new_state").value,
+		    ModificationTime: date
+		}],
+	    },
+	    ClientCookie: this.cookie
+	};
+	this.socket.send(JSON.stringify(msg)); 
+	this.update_list(msg.Params.Alarms);
     }
 }
