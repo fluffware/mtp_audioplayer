@@ -30,6 +30,7 @@ chrono="0.4"
 num_enum="0.5"
 const-str="0.3"
 paste="1.0"
+simple_samplerate={git="https://github.com/fluffware/simple_samplerate.git"}
 
 [dev-dependencies]
 test-log = "0.2"

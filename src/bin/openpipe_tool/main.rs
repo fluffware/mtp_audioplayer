@@ -2,8 +2,8 @@ use clap::{App, Arg};
 use futures::stream::StreamExt;
 use futures::FutureExt;
 use futures::SinkExt;
-use log::{debug, error, info, warn};
-use mtp_audioplayer::open_pipe::alarm_data::AlarmData;
+use log::{debug, error, info};
+//use mtp_audioplayer::open_pipe::alarm_data::AlarmData;
 use mtp_audioplayer::open_pipe::{
     alarm_server::AlarmServer,
     connection::{self, Connection, MessageVariant},
@@ -13,7 +13,7 @@ use serde_json;
 use std::sync::{Arc, Mutex, Weak};
 use tokio::signal;
 use tokio::sync::mpsc::UnboundedSender;
-use tokio::time::{timeout, Duration};
+//use tokio::time::{timeout, Duration};
 use tokio_util::sync::CancellationToken;
 use warp::ws::Message as WsMessage;
 use warp::{Filter, Reply};
@@ -177,6 +177,7 @@ async fn subscribe_tags(
     Ok((subscription, tag_values))
 }*/
 
+/*
 async fn subscribe_alarms(pipe: &mut Connection) -> DynResult<Vec<AlarmData>> {
     debug!("Subcribing alarms");
     let _subscription = pipe.subscribe_alarms().await?;
@@ -212,6 +213,7 @@ async fn subscribe_alarms(pipe: &mut Connection) -> DynResult<Vec<AlarmData>> {
     }
     Ok(alarms)
 }
+*/
 
 fn setup_client(open_pipe_path: &str) -> Arc<dyn Fn(warp::ws::Ws) -> Box<dyn Reply> + Send + Sync> {
     let open_pipe_path = Arc::new(open_pipe_path.to_owned());

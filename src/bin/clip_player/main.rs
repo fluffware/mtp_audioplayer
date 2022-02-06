@@ -1,4 +1,4 @@
-use log::{error,debug};
+use log::{error};
 use std::sync::Arc;
 use clap::{Arg, App, SubCommand};
 use mtp_audioplayer::{
@@ -6,8 +6,8 @@ use mtp_audioplayer::{
     read_config,
     read_config::PlayerConfig,
     app_config,
+    sample_buffer::SampleBuffer
 };
-use std::fs::File;
 use std::path::Path;
 
 /*
@@ -160,7 +160,7 @@ async fn play_file(sound_file: &str) -> DynResult<()>
         Ok(c) => c
     };
 
-    let samples = Arc::new(samples);
+    let samples = Arc::new(SampleBuffer::I16(samples));
     clip_player.start_clip(samples.clone()).await?;
     clip_player.shutdown();
     Ok(())

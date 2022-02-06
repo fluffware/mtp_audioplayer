@@ -1,84 +1,150 @@
 use crate::actions::action::Action;
-use crate::state_machine::StateMachine;
 use crate::actions::{
+    alarm_dispatcher::{self, AlarmDispatched, AlarmDispatcher},
     debug::DebugAction,
+    goto::GotoAction,
     parallel::ParallelAction,
     play::PlayAction,
     repeat::RepeatAction,
     sequence::SequenceAction,
-    tag_dispatcher::{self, TagDispatched, TagDispatcher},
-    alarm_dispatcher::{self, AlarmDispatched, AlarmDispatcher},
-    wait::WaitAction,
-    wait_tag::WaitTagAction,
-    wait_alarm::WaitAlarmAction,
-    goto::GotoAction,
-    tag_setter::TagSetter,
     set_tag::SetTagAction,
+    tag_dispatcher::{self, TagDispatched, TagDispatcher},
+    tag_setter::TagSetter,
+    wait::WaitAction,
+    wait_alarm::WaitAlarmAction,
+    wait_tag::WaitTagAction,
 };
 use crate::alarm_filter::BoolOp as AlarmBoolOp;
 use crate::clip_queue::ClipQueue;
 use crate::open_pipe::alarm_data::AlarmData;
-use crate::read_config::{ActionType};
 use crate::open_pipe::alarm_data::AlarmId;
+use crate::read_config::ActionType;
+use crate::sample_buffer::{Sample as BufferSample, SampleBuffer};
+use crate::state_machine::StateMachine;
 use crate::{
     clip_player::ClipPlayer,
     read_config::{ClipType, PlayerConfig},
 };
-use log::debug;
+use cpal::SampleFormat;
+use log::{debug, error};
+use simple_samplerate::{sample::Sample, samplerate::Samplerate};
 use std::collections::{HashMap, HashSet};
+use std::io::Read;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
-use tokio::sync::oneshot;
-use tokio::sync::mpsc::{self, UnboundedSender};
-
+use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::watch;
 
 type DynResult<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
+const BLOCK_SIZE: usize = 1024;
 
-fn load_clip(os_file: &Path) -> DynResult<Arc<Vec<i16>>> {
-    let mut samples;
-    match hound::WavReader::open(&os_file) {
-        Ok(mut reader) => {
-            samples = Vec::<i16>::new();
-            for s in reader.samples::<i16>() {
-                match s {
-                    Ok(s) => samples.push(s),
-                    Err(err) => {
-                        return Err(format!(
-                            "Failed to read samples from file \"{}\": {}",
-                            os_file.to_string_lossy(),
-                            err
-                        )
-                        .into())
-                    }
+fn convert_samples<S, R>(
+    reader: &mut hound::WavReader<R>,
+    file_name: &Path,
+    from_rate: u32,
+    to_rate: u32,
+    channels: usize,
+) -> DynResult<Vec<S>>
+where
+    R: Read,
+    S: Clone + BufferSample + Sample,
+{
+    let mut conv = Samplerate::new(from_rate, to_rate, channels).unwrap();
+    debug!("Samplerate {} -> {}", from_rate, to_rate);
+    let mut input = Vec::<i16>::new();
+    let mut out_buffer: Vec<S> = Vec::new();
+    let out_block_size = BLOCK_SIZE * to_rate as usize / from_rate as usize + 8 * channels;
+
+    for s in reader.samples::<i16>() {
+        match s {
+            Ok(s) => {
+                input.push(s);
+                if input.len() >= BLOCK_SIZE {
+                    //println!("Writing block");
+                    let start = out_buffer.len();
+                    out_buffer.resize(out_block_size + start, S::SAMPLE_OFFSET);
+                    let count = conv.process_buffer(&input, &mut out_buffer[start..]);
+                    out_buffer.truncate(count + start);
+                    input.clear();
                 }
             }
+            Err(err) => {
+                return Err(format!(
+                    "Failed to read samples from file \"{}\": {}",
+                    file_name.to_string_lossy(),
+                    err
+                )
+                .into())
+            }
         }
-        Err(err) => {
-            return Err(format!(
+    }
+    Ok(out_buffer)
+}
+
+fn load_clip(
+    os_file: &Path,
+    sample_format: SampleFormat,
+    sample_rate: u32,
+    channels: usize,
+) -> DynResult<Arc<SampleBuffer>> {
+    let mut reader = hound::WavReader::open(&os_file)
+        .map_err::<Box<dyn std::error::Error + Send + Sync>, _>(|err| {
+            format!(
                 "Failed to open audio file \"{}\": {}",
                 os_file.to_string_lossy(),
                 err
             )
-            .into())
+            .into()
+        })?;
+    let spec = reader.spec();
+
+    let samples;
+    match sample_format {
+        SampleFormat::I16 => {
+            samples = SampleBuffer::I16(convert_samples(
+                &mut reader,
+                os_file,
+                spec.sample_rate,
+                sample_rate,
+                channels,
+            )?);
         }
-    }
+        SampleFormat::U16 => {
+            samples = SampleBuffer::U16(convert_samples(
+                &mut reader,
+                os_file,
+                spec.sample_rate,
+                sample_rate,
+                channels,
+            )?);
+        }
+        SampleFormat::F32 => {
+            samples = SampleBuffer::F32(convert_samples(
+                &mut reader,
+                os_file,
+                spec.sample_rate,
+                sample_rate,
+                channels,
+            )?);
+        }
+    };
+
     Ok(Arc::new(samples))
 }
-
-const SAMPLE_MAX: f64 = std::i16::MAX as f64;
 
 pub fn load_clips(
     clip_root: &Path,
     clip_conf: &HashMap<String, ClipType>,
+    sample_format: SampleFormat,
     rate: u32,
     channels: u8,
-) -> DynResult<HashMap<String, Arc<Vec<i16>>>> {
-    let mut clips = HashMap::<String, Arc<Vec<i16>>>::new();
+) -> DynResult<HashMap<String, Arc<SampleBuffer>>> {
+    let mut clips = HashMap::<String, Arc<SampleBuffer>>::new();
     for (name, conf) in clip_conf {
         match conf {
             ClipType::File(f) => {
                 let os_name = clip_root.join(f);
-                let samples = load_clip(&os_name)?;
+                let samples = load_clip(&os_name, sample_format, rate, channels as usize)?;
                 clips.insert(name.clone(), samples);
             }
             ClipType::Sine {
@@ -88,9 +154,35 @@ pub fn load_clips(
             } => {
                 let rate = f64::from(rate);
                 let ramp = 100;
-                let scale = amplitude * SAMPLE_MAX;
                 let length = (rate * duration.as_secs_f64()).round() as usize;
-                let mut samples = Vec::<i16>::with_capacity(length * usize::from(channels));
+                let sample_max;
+                let sample_offset;
+                let mut samples;
+                match sample_format {
+                    SampleFormat::I16 => {
+                        sample_max = i16::SAMPLE_MAX as f64;
+                        sample_offset = i16::SAMPLE_OFFSET as f64;
+                        samples = SampleBuffer::I16(Vec::<i16>::with_capacity(
+                            length * usize::from(channels),
+                        ));
+                    }
+                    SampleFormat::U16 => {
+                        sample_max = u16::SAMPLE_MAX as f64;
+                        sample_offset = u16::SAMPLE_OFFSET as f64;
+                        samples = SampleBuffer::U16(Vec::<u16>::with_capacity(
+                            length * usize::from(channels),
+                        ));
+                    }
+                    SampleFormat::F32 => {
+                        sample_max = f32::SAMPLE_MAX as f64;
+                        sample_offset = f32::SAMPLE_OFFSET as f64;
+                        samples = SampleBuffer::F32(Vec::<f32>::with_capacity(
+                            length * usize::from(channels),
+                        ))
+                    }
+                }
+                let scale = amplitude * sample_max;
+
                 let fscale = frequency * std::f64::consts::TAU / rate;
                 for i in 0..length {
                     let env;
@@ -101,9 +193,13 @@ pub fn load_clips(
                     } else {
                         env = scale;
                     }
-                    let s = (f64::sin((i as f64) * fscale) * env) as i16;
+                    let s = f64::sin((i as f64) * fscale) * env + sample_offset;
                     for _ in 0..channels {
-                        samples.push(s);
+                        match &mut samples {
+                            SampleBuffer::I16(buf) => buf.push(s as i16),
+                            SampleBuffer::U16(buf) => buf.push(s as u16),
+                            SampleBuffer::F32(buf) => buf.push(s as f32),
+                        }
                     }
                 }
 
@@ -133,7 +229,7 @@ pub struct PlaybackContext {
     pub rate: u32,
     pub channels: u8,
     pub clip_queue: Arc<ClipQueue>,
-    pub clips: HashMap<String, Arc<Vec<i16>>>,
+    pub clips: HashMap<String, Arc<SampleBuffer>>,
 }
 
 impl PlaybackContext {
@@ -156,6 +252,7 @@ pub fn setup_clip_playback(
     let clips = load_clips(
         &clip_root,
         &player_conf.clips,
+        SampleFormat::I16,
         player_conf.rate,
         player_conf.channels,
     )?;
@@ -177,8 +274,7 @@ pub struct ActionContext {
     pub actions: HashMap<String, Arc<dyn Action + Send + Sync>>,
 }
 
-struct ActionBuildData<'a>
-{
+struct ActionBuildData<'a> {
     playback_ctxt: &'a PlaybackContext,
     tag_ctxt: &'a Arc<TagContext>,
     alarm_ctxt: &'a Arc<AlarmContext>,
@@ -188,14 +284,13 @@ struct ActionBuildData<'a>
 
 fn action_conf_to_action(
     build_data: &ActionBuildData,
-    action_conf: &ActionType,    
+    action_conf: &ActionType,
 ) -> DynResult<Arc<dyn Action + Send + Sync>> {
     match action_conf {
         ActionType::Sequence(conf_actions) => {
             let mut sequence = SequenceAction::new();
             for conf_action in conf_actions {
-                let action =
-                    action_conf_to_action(build_data, conf_action)?;
+                let action = action_conf_to_action(build_data, conf_action)?;
                 sequence.add_arc_action(action);
             }
             Ok(Arc::new(sequence))
@@ -203,8 +298,7 @@ fn action_conf_to_action(
         ActionType::Parallel(conf_actions) => {
             let mut parallel = ParallelAction::new();
             for conf_action in conf_actions {
-                let action =
-                    action_conf_to_action(build_data, conf_action)?;
+                let action = action_conf_to_action(build_data, conf_action)?;
                 parallel.add_arc_action(action);
             }
             Ok(Arc::new(parallel))
@@ -214,7 +308,8 @@ fn action_conf_to_action(
             timeout,
             sound,
         } => {
-            let samples = build_data.playback_ctxt
+            let samples = build_data
+                .playback_ctxt
                 .clips
                 .get(sound)
                 .ok_or_else(|| format!("No clip named '{}'", sound))?;
@@ -237,7 +332,7 @@ fn action_conf_to_action(
             if let Some((machine, name)) = state_name.split_once(":") {
                 state_machine = match build_data.state_machine_map.get(name) {
                     Some(s) => s,
-                    None => return Err(format!("No state machine named '{}'", machine).into())
+                    None => return Err(format!("No state machine named '{}'", machine).into()),
                 };
                 state_name_ref = name;
             } else {
@@ -246,9 +341,18 @@ fn action_conf_to_action(
             }
             let state_index = match state_machine.find_state_index(state_name_ref) {
                 Some(s) => s,
-                None => return Err(format!("No state named '{}' in state machine '{}'", state_name, state_machine.name).into())
+                None => {
+                    return Err(format!(
+                        "No state named '{}' in state machine '{}'",
+                        state_name, state_machine.name
+                    )
+                    .into())
+                }
             };
-            Ok(Arc::new(GotoAction::new(state_index, Arc::downgrade(state_machine))))
+            Ok(Arc::new(GotoAction::new(
+                state_index,
+                Arc::downgrade(state_machine),
+            )))
         }
         ActionType::WaitTag {
             tag_name,
@@ -266,10 +370,7 @@ fn action_conf_to_action(
             condition.clone(),
             build_data.alarm_ctxt.clone(),
         ))),
-        ActionType::SetTag {
-            tag_name,
-            value,
-        } => Ok(Arc::new(SetTagAction::new(
+        ActionType::SetTag { tag_name, value } => Ok(Arc::new(SetTagAction::new(
             tag_name.clone(),
             value.clone(),
             build_data.tag_ctxt.clone(),
@@ -278,22 +379,21 @@ fn action_conf_to_action(
     }
 }
 
-
 struct TagObservable {
     state: Option<String>,
-    observers: Vec<oneshot::Sender<String>>,
+    observers: (watch::Sender<String>, watch::Receiver<String>),
 }
 
 pub struct TagContext {
     tags: Mutex<HashMap<String, TagObservable>>,
-    tag_send_tx: UnboundedSender<(String,String)>
+    tag_send_tx: UnboundedSender<(String, String)>,
 }
 
 impl TagContext {
-    pub fn new(tag_send_tx: UnboundedSender<(String,String)>) -> TagContext {
+    pub fn new(tag_send_tx: UnboundedSender<(String, String)>) -> TagContext {
         TagContext {
             tags: Mutex::new(HashMap::new()),
-            tag_send_tx
+            tag_send_tx,
         }
     }
 
@@ -302,8 +402,8 @@ impl TagContext {
         if let Ok(mut tags) = self.tags.lock() {
             if let Some(data) = tags.get_mut(name) {
                 data.state = Some(new_value.to_string());
-                for obs in data.observers.drain(0..) {
-                    let _ = obs.send(new_value.to_string());
+                if let Err(err) = data.observers.0.send(new_value.to_string()) {
+                    error!("Failed to notify tag observers: {}", err);
                 }
             }
         }
@@ -316,10 +416,11 @@ impl TagContext {
 }
 
 impl TagSetter for TagContext {
-    fn set_tag(&self, tag_name: &str, value: &str)
-    {
+    fn set_tag(&self, tag_name: &str, value: &str) {
         self.tag_changed(tag_name, value);
-        let _ = self.tag_send_tx.send((tag_name.to_string(), value.to_string()));
+        let _ = self
+            .tag_send_tx
+            .send((tag_name.to_string(), value.to_string()));
     }
 }
 
@@ -336,11 +437,13 @@ impl TagDispatcher for TagContext {
             .get_mut(tag)
             .ok_or_else(|| tag_dispatcher::Error::TagNotFound)?;
         let value = data.state.clone();
-        let (tx, rx) = oneshot::channel();
-        data.observers.push(tx);
-        let wait_tag = Box::pin(async {
-            rx.await
-                .map_err(|_| tag_dispatcher::Error::DispatcherNotAvailable)
+        let mut rx = data.observers.1.clone();
+        let wait_tag = Box::pin(async move {
+            rx.borrow_and_update(); // Make sure that changed will block until next change
+            rx.changed()
+                .await
+                .map_err(|_| tag_dispatcher::Error::DispatcherNotAvailable)?;
+            Ok(rx.borrow().to_string())
         });
         Ok((value, wait_tag))
     }
@@ -352,7 +455,10 @@ impl TagDispatcher for TagContext {
     }
 }
 
-pub fn setup_tags(player_conf: &PlayerConfig, tag_send_tx: UnboundedSender<(String,String)>) -> DynResult<TagContext> {
+pub fn setup_tags(
+    player_conf: &PlayerConfig,
+    tag_send_tx: UnboundedSender<(String, String)>,
+) -> DynResult<TagContext> {
     let tag_ctxt = TagContext::new(tag_send_tx);
     {
         let mut tags = tag_ctxt.tags.lock().unwrap();
@@ -361,7 +467,7 @@ pub fn setup_tags(player_conf: &PlayerConfig, tag_send_tx: UnboundedSender<(Stri
                 name.to_string(),
                 TagObservable {
                     state: None,
-                    observers: Vec::new(),
+                    observers: watch::channel("".to_string()),
                 },
             );
         }
@@ -369,12 +475,10 @@ pub fn setup_tags(player_conf: &PlayerConfig, tag_send_tx: UnboundedSender<(Stri
     Ok(tag_ctxt)
 }
 
-
 struct AlarmFilterState {
-    
     filter: Box<AlarmBoolOp>,
     matching: HashSet<AlarmId>,
-    observers: Vec<oneshot::Sender<u32>>,    
+    observers: (watch::Sender<u32>, watch::Receiver<u32>),
 }
 
 impl AlarmFilterState {
@@ -382,15 +486,15 @@ impl AlarmFilterState {
         if self.filter.evaluate(new_alarm) {
             if self.matching.insert(AlarmId::from(new_alarm)) {
                 let count = self.matching.len();
-                for obs in self.observers.drain(0..) {
-                    let _ = obs.send(count as u32);
+                if let Err(err) = self.observers.0.send(count as u32) {
+                    error!("Failed to notify alarm observers: {}", err);
                 }
             }
         } else {
             if self.matching.remove(&AlarmId::from(new_alarm)) {
                 let count = self.matching.len();
-                for obs in self.observers.drain(0..) {
-                    let _ = obs.send(count as u32);
+                if let Err(err) = self.observers.0.send(count as u32) {
+                    error!("Failed to notify alarm observers: {}", err);
                 }
             }
         }
@@ -399,12 +503,15 @@ impl AlarmFilterState {
 }
 
 pub struct AlarmContext {
-    alarm_filters: Mutex<HashMap<String, AlarmFilterState>>
+    alarm_filters: Mutex<HashMap<String, AlarmFilterState>>,
 }
 
 impl AlarmContext {
     pub fn handle_notification(&self, new_alarm: &AlarmData) -> DynResult<()> {
-        let mut filters = self.alarm_filters.lock().map_err(|e| format!("Failed to lock alarm filters: {}", e))?;
+        let mut filters = self
+            .alarm_filters
+            .lock()
+            .map_err(|e| format!("Failed to lock alarm filters: {}", e))?;
         for filter in filters.values_mut() {
             filter.handle_notification(new_alarm)?;
         }
@@ -412,32 +519,31 @@ impl AlarmContext {
     }
 }
 
-impl AlarmDispatcher for AlarmContext
-{
-    
-    fn wait_alarm_filter(&self, filter_name: &str) -> Result<(u32, AlarmDispatched), alarm_dispatcher::Error>
-    {
+impl AlarmDispatcher for AlarmContext {
+    fn wait_alarm_filter(
+        &self,
+        filter_name: &str,
+    ) -> Result<(u32, AlarmDispatched), alarm_dispatcher::Error> {
         let mut filters = self
-        .alarm_filters
+            .alarm_filters
             .lock()
             .map_err(|_| alarm_dispatcher::Error::DispatcherNotAvailable)?;
         let filter = filters
             .get_mut(filter_name)
             .ok_or_else(|| alarm_dispatcher::Error::AlarmFilterNotFound)?;
         let count = filter.matching.len();
-        let (tx, rx) = oneshot::channel();
-        filter.observers.push(tx);
-        let wait_alarm = Box::pin(async {
-            rx.await
-                .map_err(|_| alarm_dispatcher::Error::DispatcherNotAvailable)
+        let mut rx = filter.observers.1.clone();
+        let wait_alarm = Box::pin(async move {
+            rx.borrow_and_update(); // Make sure that changed will block until next change
+            rx.changed()
+                .await
+                .map_err(|_| alarm_dispatcher::Error::DispatcherNotAvailable)?;
+            Ok(*rx.borrow())
         });
         Ok((count as u32, wait_alarm))
     }
-    
-    
-    
-    fn get_filter_count(&self, filter_name: &str) -> Result<u32, alarm_dispatcher::Error>
-    {
+
+    fn get_filter_count(&self, filter_name: &str) -> Result<u32, alarm_dispatcher::Error> {
         let mut filters = self
             .alarm_filters
             .lock()
@@ -449,13 +555,15 @@ impl AlarmDispatcher for AlarmContext
     }
 }
 
-pub fn setup_alarms(
-    player_conf: &PlayerConfig,
-) -> DynResult<AlarmContext> {
+pub fn setup_alarms(player_conf: &PlayerConfig) -> DynResult<AlarmContext> {
     let mut alarm_filters = HashMap::new();
 
     for (name, op) in &player_conf.named_alarm_filters {
-        let filter_state =AlarmFilterState{filter: Box::new(op.clone()), matching: HashSet::new(), observers: Vec::new()};
+        let filter_state = AlarmFilterState {
+            filter: Box::new(op.clone()),
+            matching: HashSet::new(),
+            observers: watch::channel(0),
+        };
         alarm_filters.insert(name.to_string(), filter_state);
     }
     let alarm_ctxt = AlarmContext {
@@ -465,16 +573,17 @@ pub fn setup_alarms(
 }
 
 pub struct StateMachineContext {
-    state_machines: Vec<Arc<StateMachine>>
+    state_machines: Vec<Arc<StateMachine>>,
 }
 
-impl StateMachineContext
-{
-    pub async fn start_all(&self)
-    {
+impl StateMachineContext {
+    pub async fn run_all(&self) -> DynResult<()> {
+        let mut running = Vec::new();
         for sm in &self.state_machines {
-            sm.goto(0).await;
+            running.push(sm.run());
         }
+        let _ = futures::future::try_join_all(running).await?;
+        Ok(())
     }
 }
 pub fn setup_state_machines(
@@ -487,28 +596,30 @@ pub fn setup_state_machines(
     let mut state_machine_map = HashMap::new();
     for state_machine_conf in &player_conf.state_machines {
         let state_machine = StateMachine::new(&state_machine_conf.id);
-        for state_conf in &state_machine_conf.states {            
+        for state_conf in &state_machine_conf.states {
             state_machine.add_state(&state_conf.id);
             debug!("Added: {}:{}", state_machine_conf.id, state_conf.id);
         }
         state_machine_map.insert(state_machine_conf.id.to_string(), state_machine);
     }
-    
+
     for state_machine_conf in &player_conf.state_machines {
         let state_machine = state_machine_map.get(&state_machine_conf.id).unwrap();
-        for state_conf in &state_machine_conf.states {            
+        for state_conf in &state_machine_conf.states {
             let state_index = state_machine.find_state_index(&state_conf.id).unwrap();
             let action_conf = &state_conf.action;
             //let named_actions = &action_ctxt.actions;
             let build_data = ActionBuildData {
-                playback_ctxt, 
-                tag_ctxt, alarm_ctxt,state_machine_map: &state_machine_map, current_state_machine: state_machine
+                playback_ctxt,
+                tag_ctxt,
+                alarm_ctxt,
+                state_machine_map: &state_machine_map,
+                current_state_machine: state_machine,
             };
-            let action =  action_conf_to_action(&build_data, action_conf)?;
+            let action = action_conf_to_action(&build_data, action_conf)?;
             state_machine.set_action(state_index, action);
-            state_machines.push(state_machine.clone());
-                
         }
+        state_machines.push(state_machine.clone());
     }
-    Ok(StateMachineContext {state_machines})
+    Ok(StateMachineContext { state_machines })
 }

@@ -7,3 +7,4 @@ pub mod priority_scheduler;
 pub mod clip_queue;
 pub mod actions;
 pub mod state_machine;
+pub mod sample_buffer;

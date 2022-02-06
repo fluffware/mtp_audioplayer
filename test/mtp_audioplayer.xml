@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <audioplayer xmlns="http://www.elektro-kapsel.se/audioplayer/v1">
   <bind>/tmp/siemens/automation/HmiRunTime</bind>
-  <playback_device rate="44100" channels="2">default</playback_device>
+  <playback_device rate="48000" channels="2">default</playback_device>
   <clips path="DTMF"> 
     <file id="SoundAlarm">0.wav</file>
     <file id="SoundInfo">1.wav</file>
@@ -20,7 +20,7 @@
     <sine id="F" amplitude="0.5" frequency="698.46" duration="0.1s"/>
     <sine id="F#" amplitude="0.5" frequency="739.99" duration="0.1s"/>
     <sine id="G" amplitude="0.5" frequency="783.99" duration="0.1s"/>
-    <sine id="G#" amplitude="0.5" frequency="830.61" duration="0.1s"/>
+    <sine id="G#" amplitude="0.5" frequency="830.61" duration="1s"/>
 
   </clips>
   <tags>
@@ -29,9 +29,8 @@
     <tag>SoundExe</tag>
     <tag>SoundDec</tag>
     <tag>SoundTimer</tag>
-    <tag>AlarmProfile</tag>
-    <tag>AlarmProfile</tag>
     <tag>Tag1</tag>
+    <tag>OnOff</tag>
     <!--
 	<toggle tag="AlarmRestart">
 	<alarm_restart/>
@@ -76,8 +75,9 @@
   <state_machine id = "toggled">
     <state id="start">
       <repeat>
-	<wait_tag changed="1">SoundExe</wait_tag>
+	<wait_tag ne="0">SoundExe</wait_tag>
 	<play>A</play>
+	<set_tag tag="SoundExe">0</set_tag>
       </repeat>
       <repeat>
 	<wait_tag changed="1">SoundInc</wait_tag>
@@ -130,5 +130,30 @@
 	<play>D</play>
       </repeat>
     </state>
+  </state_machine>
+  <state_machine id="onoff">
+    <state id="on">
+      <sequence>
+	<set_tag tag="OnOff">1</set_tag>
+	<wait>5s</wait>
+	<goto>off</goto>
+      </sequence>
+      <sequence>
+	<wait_tag ne="1">OnOff</wait_tag>
+	<goto>off</goto>
+      </sequence>
+    </state>
+    <state id="off">
+      <sequence>
+	<set_tag tag="OnOff">0</set_tag>
+	<wait>5s</wait>
+	<goto>on</goto>
+      </sequence>
+      <sequence>
+	<wait_tag ne="0">OnOff</wait_tag>
+	<goto>on</goto>
+      </sequence>
+    </state>
+
   </state_machine>
 </audioplayer>

@@ -2,12 +2,13 @@ use crate::actions::action::{Action, ActionFuture};
 use crate::clip_queue::ClipQueue;
 use std::sync::Arc;
 use tokio::time::Duration;
+use crate::sample_buffer::SampleBuffer;
 
 pub struct PlayAction {
     priority: i32,
     clip_queue: Arc<ClipQueue>,
     timeout: Option<Duration>,
-    samples: Arc<Vec<i16>>,
+    samples: Arc<SampleBuffer>,
 }
 
 impl PlayAction {
@@ -15,7 +16,7 @@ impl PlayAction {
         clip_queue: Arc<ClipQueue>,
         priority: i32,
         timeout: Option<Duration>,
-        samples: Arc<Vec<i16>>,
+        samples: Arc<SampleBuffer>,
     ) -> PlayAction {
         PlayAction {
             priority,

@@ -16,6 +16,7 @@ use std::sync::Arc;
 use std::sync::{Condvar, Mutex, MutexGuard};
 use std::task::{Context, Poll, Waker};
 use std::thread;
+use crate::sample_buffer::{SampleBuffer, AsSampleSlice, Sample};
 
 #[derive(Debug, Clone)]
 pub struct ClipPlayer {
@@ -96,7 +97,7 @@ enum PlaybackState {
     Setup, // Initializing playback thread
     Ready, // Ready to play samples. Set by thread
     // Play samples. Set by client
-    Playing { seqno: u32, samples: Arc<Vec<i16>> },
+    Playing { seqno: u32, samples: Arc<SampleBuffer> },
     Cancel,       // Cancel current playback. Set by client
     Error(Error), // Set by thread. Set to Ready to clear
     Shutdown,     // Tell the thread to exit.
@@ -163,16 +164,16 @@ impl PlaybackControl {
         }
     }
 }
-fn generate_samples(
+fn generate_samples<S>(
     ctrl: &PlaybackControl,
-    buffer: &mut [i16],
+    buffer: &mut [S],
     current_seqno: &mut u32,
     pos: &mut usize,
-) {
+) where S: Sample + Copy, SampleBuffer: AsSampleSlice<S> {
     if let Ok(mut state) = ctrl.state.lock() {
         match &mut *state {
             PlaybackState::Playing { seqno, samples } => {
-                let samples: &[i16] = &samples;
+                let samples: &[S] = samples.as_sample_slice();
                 if *seqno != *current_seqno {
                     *current_seqno = *seqno;
                     *pos = 0;
@@ -190,7 +191,7 @@ fn generate_samples(
                     let copy_len = end - *pos;
                     buffer[0..copy_len].copy_from_slice(&samples.as_ref()[*pos..end]);
                     for s in buffer[copy_len..].iter_mut() {
-                        *s = 0;
+                        *s = S::SAMPLE_OFFSET;
                     }
                     *pos = end;
                 }
@@ -207,7 +208,7 @@ fn generate_samples(
             _ => {
                 //debug!("Stream callback: Silence");
                 for s in buffer {
-                    *s = 0;
+                    *s = S::SAMPLE_OFFSET;
                 }
             }
         }
@@ -223,7 +224,7 @@ fn playback_thread(device: Device, stream_config: StreamConfig, ctrl: Arc<Playba
         SampleFormat::I16,
         move |data, _info| {
             let buffer = data.as_slice_mut::<i16>().unwrap();
-            generate_samples(ctrl_cb.as_ref(), buffer, &mut current_seqno, &mut pos);
+            generate_samples::<i16>(ctrl_cb.as_ref(), buffer, &mut current_seqno, &mut pos);
         },
         |err| {
             error!("Stream error: {}", err);
@@ -385,7 +386,7 @@ impl ClipPlayer {
 
     pub fn start_clip(
         &self,
-        clip: Arc<Vec<i16>>,
+        clip: Arc<SampleBuffer>,
     ) -> Pin<Box<dyn Future<Output = Result<(), Error>> + Send>> {
         let seqno = NEXT_SEQ_NO.fetch_add(1, Ordering::Relaxed);
         {

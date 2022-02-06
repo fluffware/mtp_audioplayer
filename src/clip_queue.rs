@@ -3,6 +3,7 @@ use crate::priority_scheduler::Scheduler;
 use std::sync::Arc;
 use std::error::Error;
 use tokio::time::Duration;
+use crate::sample_buffer::SampleBuffer;
 
 pub struct ClipQueue
 {
@@ -19,7 +20,7 @@ impl ClipQueue
 	}
     }
     
-    pub async fn play(&self, samples: Arc<Vec<i16>>, priority: i32, 
+    pub async fn play(&self, samples: Arc<SampleBuffer>, priority: i32, 
 		      timeout: Option<Duration>) ->
 		      Result<(), Box<dyn Error + Send + Sync>>
     {

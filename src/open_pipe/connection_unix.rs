@@ -33,7 +33,7 @@ where
                 if l == 0 {
                     break;
                 }
-                debug!("Got line: {}", line);
+                //debug!("Got line: {}", line);
                 send.send(line.as_bytes().to_vec()).await.unwrap();
             }
         }

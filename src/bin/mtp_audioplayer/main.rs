@@ -10,7 +10,7 @@ use std::path::Path;
 use std::sync::Arc;
 use tokio::signal;
 use tokio::time::{timeout, Duration};
-use tokio::sync::mpsc::{self, UnboundedReceiver};
+use tokio::sync::mpsc::{UnboundedReceiver};
 use open_pipe::{MessageVariant, WriteTagValue};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync + 'static>>;
@@ -126,7 +126,7 @@ fn read_configuration(path: &Path) -> Result<(PlayerConfig, Arc<TagContext>, Arc
         .parent()
         .ok_or("Configuration file has no parent")?;
 
-     let (pipe_send_tx, mut pipe_send_rx) = tokio::sync::mpsc::unbounded_channel::<(String, String)>();
+     let (pipe_send_tx, pipe_send_rx) = tokio::sync::mpsc::unbounded_channel::<(String, String)>();
     let playback_ctxt = app_config::setup_clip_playback(&app_conf, base_dir)?;
     let tag_ctxt = app_config::setup_tags(&app_conf, pipe_send_tx)?;
     let tag_ctxt = Arc::new(tag_ctxt);
@@ -168,7 +168,8 @@ async fn main() {
         Ok(c) => c,
     };
 
-    state_machine_ctxt.start_all().await;
+    let running_sm = state_machine_ctxt.run_all();
+    tokio::pin!(running_sm);
     
     let mut tag_names: Vec<String> = tag_ctxt.tag_names();
     match subscribe_tags(&mut pipe, &mut tag_names).await {
@@ -236,7 +237,20 @@ async fn main() {
                     }
                 }
             }
+	    res = &mut running_sm => {
+		match res {
+		    Ok(_) => {
+			error!("State machine stopped");
+			done = true;
+		    }
+		    Err(err) => {
+			error!("State machine error: {}", err);
+                        return;
+		    }
+		}
+	    }
         }
     }
+
     info!("Server exiting");
 }
