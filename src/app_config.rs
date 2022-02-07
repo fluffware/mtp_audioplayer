@@ -483,6 +483,9 @@ struct AlarmFilterState {
 
 impl AlarmFilterState {
     pub fn handle_notification(&mut self, new_alarm: &AlarmData) -> DynResult<()> {
+        if new_alarm.state == 128 {
+            return Ok(())
+        }
         if self.filter.evaluate(new_alarm) {
             if self.matching.insert(AlarmId::from(new_alarm)) {
                 let count = self.matching.len();
