@@ -11,13 +11,14 @@ pub enum AlarmCondition {
 }
 
 impl AlarmCondition {
-    pub fn check(&self, new_count: u32, old_count: u32) -> bool {
+    pub fn check(&self, new_count: u32, old_count: Option<u32>) -> bool {
         use AlarmCondition::*;
+        //log::debug!("Alarm counts: {} {:?}", new_count, old_count);
         match self {
             None => new_count == 0,
             Any => new_count > 0,
-            Inc => new_count > old_count,
-            Dec => new_count < old_count,
+            Inc => old_count.map_or(false, |v| new_count > v),
+            Dec => old_count.map_or(false, |v| new_count < v),
         }
     }
 }
@@ -52,18 +53,18 @@ where
         let dispatcher = self.dispatcher.clone();
         let cond = self.condition.clone();
         Box::pin(async move {
-            let mut prev = 0;
+            let mut prev = None;
             loop {
                 let (value, wait) = dispatcher.wait_alarm_filter(&filter_name)?;
                 if cond.check(value, prev) {
                     return Ok(());
                 }
-                prev = value;
+                prev = Some(value);
                 let value = wait.await?;
                 if cond.check(value, prev) {
                     return Ok(());
                 }
-                prev = value;
+                prev = Some(value);
             }
         })
     }
