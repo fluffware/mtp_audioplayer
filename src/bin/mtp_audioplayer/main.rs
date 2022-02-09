@@ -130,7 +130,7 @@ fn read_configuration(path: &Path) -> Result<(PlayerConfig, Arc<TagContext>, Arc
     let playback_ctxt = app_config::setup_clip_playback(&app_conf, base_dir)?;
     let tag_ctxt = app_config::setup_tags(&app_conf, pipe_send_tx)?;
     let tag_ctxt = Arc::new(tag_ctxt);
-    let alarm_ctxt = app_config::setup_alarms(&app_conf)?;
+    let alarm_ctxt = app_config::setup_alarms(&app_conf, Arc::downgrade(&tag_ctxt))?;
     let alarm_ctxt = Arc::new(alarm_ctxt);
     let state_machine_ctxt = app_config::setup_state_machines(&app_conf, &playback_ctxt, &tag_ctxt, &alarm_ctxt)?;
     Ok((app_conf, tag_ctxt, alarm_ctxt, state_machine_ctxt, pipe_send_rx))

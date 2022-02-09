@@ -1,9 +1,11 @@
 use cpal::traits::DeviceTrait;
 use cpal::traits::HostTrait;
 use cpal::traits::StreamTrait;
+use cpal::BuildStreamError;
 use cpal::Device;
 use cpal::SampleFormat;
 use cpal::SampleRate;
+use cpal::Stream;
 use cpal::StreamConfig;
 use cpal::SupportedStreamConfigRange;
 use log::{debug, error, info};
@@ -16,7 +18,7 @@ use std::sync::Arc;
 use std::sync::{Condvar, Mutex, MutexGuard};
 use std::task::{Context, Poll, Waker};
 use std::thread;
-use crate::sample_buffer::{SampleBuffer, AsSampleSlice, Sample};
+use crate::sample_buffer::{self, SampleBuffer, AsSampleSlice};
 
 #[derive(Debug, Clone)]
 pub struct ClipPlayer {
@@ -169,7 +171,7 @@ fn generate_samples<S>(
     buffer: &mut [S],
     current_seqno: &mut u32,
     pos: &mut usize,
-) where S: Sample + Copy, SampleBuffer: AsSampleSlice<S> {
+) where S: sample_buffer::Sample + Copy, SampleBuffer: AsSampleSlice<S> {
     if let Ok(mut state) = ctrl.state.lock() {
         match &mut *state {
             PlaybackState::Playing { seqno, samples } => {
@@ -215,21 +217,32 @@ fn generate_samples<S>(
     }
 }
 
-fn playback_thread(device: Device, stream_config: StreamConfig, ctrl: Arc<PlaybackControl>) {
+fn build_output_stream<S>(device: Device, stream_config: &StreamConfig, sample_format: SampleFormat, ctrl_cb: Arc<PlaybackControl>) -> Result<Stream, BuildStreamError>
+where S: cpal::Sample + Copy + sample_buffer::Sample, SampleBuffer: AsSampleSlice<S>
+{
     let mut current_seqno = 0;
     let mut pos = 0;
-    let ctrl_cb = ctrl.clone();
-    let stream = match device.build_output_stream_raw(
-        &stream_config,
-        SampleFormat::I16,
+    device.build_output_stream_raw(
+        stream_config,
+        sample_format,
         move |data, _info| {
-            let buffer = data.as_slice_mut::<i16>().unwrap();
-            generate_samples::<i16>(ctrl_cb.as_ref(), buffer, &mut current_seqno, &mut pos);
+            let buffer = data.as_slice_mut::<S>().unwrap();
+            generate_samples::<S>(ctrl_cb.as_ref(), buffer, &mut current_seqno, &mut pos);
         },
         |err| {
             error!("Stream error: {}", err);
         },
-    ) {
+    )
+}
+fn playback_thread(device: Device, stream_config: StreamConfig, sample_format: SampleFormat, ctrl: Arc<PlaybackControl>) {
+   
+    let ctrl_cb = ctrl.clone();
+    let stream = match match sample_format {
+        SampleFormat::I16 => build_output_stream::<i16>(device, &stream_config, sample_format, ctrl_cb),
+        SampleFormat::U16 => build_output_stream::<u16>(device, &stream_config, sample_format, ctrl_cb),
+        SampleFormat::F32 => build_output_stream::<f32>(device, &stream_config, sample_format, ctrl_cb),
+    }
+     {
         Ok(s) => s,
         Err(e) => {
             error!("Failed to initiate audio playback: {}", e);
@@ -313,7 +326,7 @@ fn supports_samplerate(conf: &SupportedStreamConfigRange, rate: u32) -> bool {
 static NEXT_SEQ_NO: AtomicU32 = AtomicU32::new(1);
 
 impl ClipPlayer {
-    pub fn new(pcm_name: &str, rate: u32, channels: u8) -> Result<ClipPlayer, Error> {
+    pub fn new(pcm_name: &str, rate: u32, channels: u8, sample_format: SampleFormat) -> Result<ClipPlayer, Error> {
         let channels = channels as u16;
         let host = cpal::default_host();
         let device = if pcm_name == "default" {
@@ -347,8 +360,8 @@ impl ClipPlayer {
                     best_fit = Some(conf);
                 } else if supports_samplerate(&conf, rate) && !supports_samplerate(prev, rate) {
                     best_fit = Some(conf);
-                } else if conf.sample_format() == SampleFormat::I16
-                    && prev.sample_format() != SampleFormat::I16
+                } else if conf.sample_format() == sample_format
+                    && prev.sample_format() != sample_format
                 {
                     best_fit = Some(conf);
                 }
@@ -367,7 +380,7 @@ impl ClipPlayer {
             return Err(Error::NoMatchinConfig(
                 format!("No configuration that supports {} samples/s found", rate)));
         }
-        if best_fit.sample_format() != SampleFormat::I16 {
+        if best_fit.sample_format() != sample_format {
             return Err(Error::NoMatchinConfig(
                 "No configuration with signed 16-bit format found".to_string(),
             ));
@@ -379,7 +392,7 @@ impl ClipPlayer {
             waker: Mutex::new(None),
         });
         let thread_ctrl = control.clone();
-        thread::spawn(|| playback_thread(device, stream_config, thread_ctrl));
+        thread::spawn(move || playback_thread(device, stream_config, sample_format, thread_ctrl));
 
         Ok(ClipPlayer { control })
     }

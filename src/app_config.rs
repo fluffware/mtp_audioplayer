@@ -31,7 +31,7 @@ use simple_samplerate::{sample::Sample, samplerate::Samplerate};
 use std::collections::{HashMap, HashSet};
 use std::io::Read;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::watch;
 
@@ -44,6 +44,7 @@ fn convert_samples<S, R>(
     from_rate: u32,
     to_rate: u32,
     channels: usize,
+    amplitude: f32,
 ) -> DynResult<Vec<S>>
 where
     R: Read,
@@ -51,13 +52,14 @@ where
 {
     let mut conv = Samplerate::new(from_rate, to_rate, channels).unwrap();
     debug!("Samplerate {} -> {}", from_rate, to_rate);
-    let mut input = Vec::<i16>::new();
+    let mut input = Vec::<f32>::new();
     let mut out_buffer: Vec<S> = Vec::new();
     let out_block_size = BLOCK_SIZE * to_rate as usize / from_rate as usize + 8 * channels;
-
+    let scale = amplitude / 32767.0;
     for s in reader.samples::<i16>() {
         match s {
             Ok(s) => {
+                let s = f32::from(s) * scale;
                 input.push(s);
                 if input.len() >= BLOCK_SIZE {
                     //println!("Writing block");
@@ -86,6 +88,7 @@ fn load_clip(
     sample_format: SampleFormat,
     sample_rate: u32,
     channels: usize,
+    amplitude: f32,
 ) -> DynResult<Arc<SampleBuffer>> {
     let mut reader = hound::WavReader::open(&os_file)
         .map_err::<Box<dyn std::error::Error + Send + Sync>, _>(|err| {
@@ -107,6 +110,7 @@ fn load_clip(
                 spec.sample_rate,
                 sample_rate,
                 channels,
+                amplitude,
             )?);
         }
         SampleFormat::U16 => {
@@ -116,6 +120,7 @@ fn load_clip(
                 spec.sample_rate,
                 sample_rate,
                 channels,
+                amplitude,
             )?);
         }
         SampleFormat::F32 => {
@@ -125,6 +130,7 @@ fn load_clip(
                 spec.sample_rate,
                 sample_rate,
                 channels,
+                amplitude,
             )?);
         }
     };
@@ -142,9 +148,13 @@ pub fn load_clips(
     let mut clips = HashMap::<String, Arc<SampleBuffer>>::new();
     for (name, conf) in clip_conf {
         match conf {
-            ClipType::File(f) => {
-                let os_name = clip_root.join(f);
-                let samples = load_clip(&os_name, sample_format, rate, channels as usize)?;
+            ClipType::File {
+                file_name,
+                amplitude,
+            } => {
+                let os_name = clip_root.join(file_name);
+                let samples =
+                    load_clip(&os_name, sample_format, rate, channels as usize, *amplitude)?;
                 clips.insert(name.clone(), samples);
             }
             ClipType::Sine {
@@ -252,13 +262,14 @@ pub fn setup_clip_playback(
     let clips = load_clips(
         &clip_root,
         &player_conf.clips,
-        SampleFormat::I16,
+        player_conf.sample_format,
         player_conf.rate,
         player_conf.channels,
     )?;
     let rate = player_conf.rate;
     let channels = player_conf.channels;
-    let clip_player = ClipPlayer::new(&player_conf.playback_device, rate, channels)
+    let sample_format = player_conf.sample_format;
+    let clip_player = ClipPlayer::new(&player_conf.playback_device, rate, channels, sample_format)
         .map_err(|e| format!("Failed to initialise playback: {}", e))?;
 
     let clip_queue = ClipQueue::new(clip_player);
@@ -330,7 +341,7 @@ fn action_conf_to_action(
             let state_machine;
             let state_name_ref;
             if let Some((machine, name)) = state_name.split_once(":") {
-                state_machine = match build_data.state_machine_map.get(name) {
+                state_machine = match build_data.state_machine_map.get(machine) {
                     Some(s) => s,
                     None => return Err(format!("No state machine named '{}'", machine).into()),
                 };
@@ -478,30 +489,51 @@ pub fn setup_tags(
 struct AlarmFilterState {
     filter: Box<AlarmBoolOp>,
     matching: HashSet<AlarmId>,
+    ignore: HashSet<AlarmId>,
+    ignore_permanent: bool,
+    tag_setter: Weak<TagContext>,
+    tag_matching: Option<String>,
+    tag_ignored: Option<String>,
     observers: (watch::Sender<u32>, watch::Receiver<u32>),
 }
 
 impl AlarmFilterState {
     pub fn handle_notification(&mut self, new_alarm: &AlarmData) -> DynResult<()> {
         if new_alarm.state == 128 {
-            return Ok(())
+            return Ok(());
         }
         if self.filter.evaluate(new_alarm) {
             if self.matching.insert(AlarmId::from(new_alarm)) {
-                let count = self.matching.len();
+                let count = self.matching.difference(&self.ignore).count();
                 if let Err(err) = self.observers.0.send(count as u32) {
                     error!("Failed to notify alarm observers: {}", err);
                 }
+                self.update_tags(count, self.ignore.len());
             }
         } else {
+            if !self.ignore_permanent {
+                self.ignore.remove(&AlarmId::from(new_alarm));
+            }
             if self.matching.remove(&AlarmId::from(new_alarm)) {
-                let count = self.matching.len();
+                let count = self.matching.difference(&self.ignore).count();
                 if let Err(err) = self.observers.0.send(count as u32) {
                     error!("Failed to notify alarm observers: {}", err);
                 }
+                self.update_tags(count, self.ignore.len());
             }
         }
         Ok(())
+    }
+
+    fn update_tags(&self, matching: usize, ignored: usize) {
+        if let Some(tag_setter) = Weak::upgrade(&self.tag_setter) {
+            if let Some(tag_matching) = &self.tag_matching {
+                tag_setter.as_ref().set_tag(&tag_matching, &matching.to_string());
+            }
+            if let Some(tag_ignored) = &self.tag_ignored {
+                tag_setter.set_tag(&tag_ignored, &ignored.to_string());
+            }
+        }
     }
 }
 
@@ -558,14 +590,24 @@ impl AlarmDispatcher for AlarmContext {
     }
 }
 
-pub fn setup_alarms(player_conf: &PlayerConfig) -> DynResult<AlarmContext> {
+pub fn setup_alarms(player_conf: &PlayerConfig, tag_setter: Weak<TagContext>) -> DynResult<AlarmContext> {
     let mut alarm_filters = HashMap::new();
 
-    for (name, op) in &player_conf.named_alarm_filters {
+    for (name, filter_conf) in &player_conf.named_alarm_filters {
+        let tag_setter = if filter_conf.tag_matching.is_none() && filter_conf.tag_ignored.is_none() {
+            Weak::new()
+        } else {
+            tag_setter.clone()
+        };
         let filter_state = AlarmFilterState {
-            filter: Box::new(op.clone()),
+            filter: Box::new(filter_conf.filter_predicate.clone()),
             matching: HashSet::new(),
             observers: watch::channel(0),
+            ignore: HashSet::new(),
+            ignore_permanent: false,
+            tag_setter,
+            tag_matching: filter_conf.tag_matching.clone(),
+            tag_ignored: filter_conf.tag_ignored.clone(),
         };
         alarm_filters.insert(name.to_string(), filter_state);
     }
@@ -611,7 +653,6 @@ pub fn setup_state_machines(
         for state_conf in &state_machine_conf.states {
             let state_index = state_machine.find_state_index(&state_conf.id).unwrap();
             let action_conf = &state_conf.action;
-            //let named_actions = &action_ctxt.actions;
             let build_data = ActionBuildData {
                 playback_ctxt,
                 tag_ctxt,

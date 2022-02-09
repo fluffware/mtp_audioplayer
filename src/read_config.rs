@@ -1,6 +1,7 @@
 use crate::actions::wait_alarm::AlarmCondition;
 use crate::actions::wait_tag::TagCondition;
 use crate::alarm_filter;
+use cpal::SampleFormat;
 use roxmltree::{Document, Node, TextPos};
 use std::collections::HashMap;
 use std::error::Error;
@@ -68,7 +69,7 @@ impl std::fmt::Display for ConfigError {
 
 #[derive(Debug)]
 pub enum ClipType {
-    File(String),
+    File{file_name: String, amplitude: f32},
     Sine {
         amplitude: f64,
         frequency: f64,
@@ -103,7 +104,7 @@ pub enum ActionType {
     Goto(String),
     SetTag {
         tag_name: String,
-        value: String
+        value: String,
     },
 }
 
@@ -125,10 +126,11 @@ pub struct PlayerConfig {
     pub playback_device: String,
     pub rate: u32,
     pub channels: u8,
+    pub sample_format: SampleFormat,
     pub clip_root: String,
     pub clips: HashMap<String, ClipType>,
     pub tags: Vec<String>,
-    pub named_alarm_filters: HashMap<String, alarm_filter::BoolOp>,
+    pub named_alarm_filters: HashMap<String, AlarmFilterConfig>,
     pub state_machines: Vec<StateMachineConfig>,
 }
 
@@ -203,8 +205,9 @@ fn parse_bind(node: &Node) -> Result<String, ConfigError> {
 
 fn parse_file_clip(node: &Node) -> Result<(String, ClipType), ConfigError> {
     let id: String = required_attribute(&node, "id")?;
+    let amplitude = optional_attribute(&node, "amplitude")?.unwrap_or(1.0);
     let file_name = text_content(&node)?;
-    Ok((id, ClipType::File(file_name)))
+    Ok((id, ClipType::File{file_name, amplitude}))
 }
 
 fn parse_sine_clip(node: &Node) -> DynResult<(String, ClipType)> {
@@ -434,7 +437,7 @@ fn parse_parallel(parent: &Node) -> DynResult<ActionType> {
 fn parse_set_tag(node: &Node) -> DynResult<ActionType> {
     let tag_name = required_attribute(node, "tag")?;
     let value = text_content(&node)?;
-    Ok(ActionType::SetTag{tag_name, value})
+    Ok(ActionType::SetTag { tag_name, value })
 }
 
 fn parse_debug(node: &Node) -> DynResult<ActionType> {
@@ -462,15 +465,25 @@ fn parse_tags(parent: &Node) -> DynResult<Vec<String>> {
     Ok(tags)
 }
 
+#[derive(Debug)]
+pub struct AlarmFilterConfig
+{
+    pub filter_predicate: alarm_filter::BoolOp,
+    pub tag_matching: Option<String>,
+    pub tag_ignored: Option<String>,
+}
+
 fn parse_alarms(
     parent: &Node,
-    named_filters: &mut HashMap<String, alarm_filter::BoolOp>,
+    named_filters: &mut HashMap<String, AlarmFilterConfig>,
 ) -> DynResult<()> {
     for child in parent.children() {
         if check_element_ns(&child)? {
             match child.tag_name().name() {
                 "filter" => {
                     let filter_id = required_attribute(&child, "id")?;
+                    let tag_matching = optional_attribute(&child, "tag_matching")?;
+                    let tag_ignored = optional_attribute(&child, "tag_ignored")?;
                     let filter_def = text_content(&child)?.trim().to_owned();
                     let op = match alarm_filter::parse_filter(&filter_def) {
                         Ok(op) => op,
@@ -487,7 +500,7 @@ fn parse_alarms(
                             .into());
                         }
                     };
-                    named_filters.insert(filter_id, op);
+                    named_filters.insert(filter_id, AlarmFilterConfig{filter_predicate: op, tag_matching, tag_ignored});
                 }
                 _ => {
                     return Err(ConfigError::new(&child, UnexpectedElement).into());
@@ -537,6 +550,14 @@ fn parse_state_machine(parent: &Node) -> DynResult<StateMachineConfig> {
 fn parse_playback_device(node: &Node, player: &mut PlayerConfig) -> DynResult<()> {
     player.rate = required_attribute(&node, "rate")?;
     player.channels = required_attribute(&node, "channels")?;
+    let format = optional_attribute::<String>(&node, "format")?;
+    match format.as_ref().map(|s| s.as_str()) {
+        Some("i16") => player.sample_format = SampleFormat::I16,
+        Some("u16") => player.sample_format = SampleFormat::U16,
+        Some("f32") => player.sample_format = SampleFormat::F32,
+        Some(_) => return Err("Invalid sample format".into()),
+        None => {}
+    }
 
     player.playback_device = text_content(&node)?;
 
@@ -567,6 +588,7 @@ pub fn read_str(input: &str) -> DynResult<PlayerConfig> {
         playback_device: "".to_string(),
         rate: 44100,
         channels: 2,
+        sample_format: SampleFormat::I16,
         clip_root: String::new(),
         clips: HashMap::new(),
         tags: Vec::new(),

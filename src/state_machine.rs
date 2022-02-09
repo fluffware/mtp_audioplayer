@@ -10,6 +10,7 @@ struct State {
 struct StateMachineMut {
     states: Vec<State>,
     active_state: Option<usize>,
+    restart: bool, // Restart the state if it's already running
 }
 
 pub struct StateMachine {
@@ -26,6 +27,7 @@ impl StateMachine {
             current: Mutex::new(StateMachineMut {
                 states: Vec::new(),
                 active_state: None,
+                restart: false,
             }),
         })
     }
@@ -71,50 +73,51 @@ impl StateMachine {
             current.active_state = Some(0);
         }
         let mut running_action = None;
-	let mut running_state = None;
+        let mut running_state = None;
         loop {
             {
-                let current = self
+                let mut current = self
                     .current
                     .lock()
                     .map_err(|_| "Failed to lock state-machine")?;
-		if running_state != current.active_state {
+                if running_state != current.active_state || current.restart {
                     if let Some(active_state) = current.active_state {
-			if let Some(action) = &current.states[active_state].action {
+                        if let Some(action) = &current.states[active_state].action {
                             running_action = Some(action.run());
+                            /*
                             log::debug!(
                                 "Running action for state {}",
                                 &current.states[active_state].name
-                            );
-                    }
+                            );*/
+                        }
                     } else {
-			break;
-		    }
-		    running_state = current.active_state;
-		}
-	    }
+                        break;
+                    }
+                    running_state = current.active_state;
+                    current.restart = false;
+                }
+            }
             if let Some(running) = &mut running_action {
                 tokio::pin!(running);
                 tokio::select! {
-                    res = running => {
-                        match res {
-                            Ok(_) => {
-				running_action = None;
+                        res = running => {
+                            match res {
+                                Ok(_) => {
+                    running_action = None;
+                                }
+                                Err(e) => return Err(e),
                             }
-                            Err(e) => return Err(e),
+                        }
+                        _ = self.current_changed.notified() => {
+                //log::debug!("Notified");
+
+
                         }
                     }
-                    _ = self.current_changed.notified() => {
-			log::debug!("Notified");
-			running_state = None;
-			
-                    }
-                }
             } else {
                 self.current_changed.notified().await;
             }
-	    log::debug!("Loop done");
-	    
+            //log::debug!("Loop done");
         }
         Ok(())
     }
@@ -124,7 +127,8 @@ impl StateMachine {
         if current.states.len() <= state_index {
             return;
         }
-	log::debug!("Goto {}", current.states[state_index].name);
+        log::debug!("Goto {}", current.states[state_index].name);
+        current.restart = true;
         current.active_state = Some(state_index);
         self.current_changed.notify_one();
     }
