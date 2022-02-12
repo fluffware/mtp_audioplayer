@@ -69,7 +69,10 @@ impl std::fmt::Display for ConfigError {
 
 #[derive(Debug)]
 pub enum ClipType {
-    File{file_name: String, amplitude: f32},
+    File {
+        file_name: String,
+        amplitude: f32,
+    },
     Sine {
         amplitude: f64,
         frequency: f64,
@@ -105,6 +108,13 @@ pub enum ActionType {
     SetTag {
         tag_name: String,
         value: String,
+    },
+    IgnoreAlarms {
+        filter: String,
+        permanent: bool,
+    },
+    RestoreAlarms {
+        filter: String,
     },
 }
 
@@ -207,7 +217,13 @@ fn parse_file_clip(node: &Node) -> Result<(String, ClipType), ConfigError> {
     let id: String = required_attribute(&node, "id")?;
     let amplitude = optional_attribute(&node, "amplitude")?.unwrap_or(1.0);
     let file_name = text_content(&node)?;
-    Ok((id, ClipType::File{file_name, amplitude}))
+    Ok((
+        id,
+        ClipType::File {
+            file_name,
+            amplitude,
+        },
+    ))
 }
 
 fn parse_sine_clip(node: &Node) -> DynResult<(String, ClipType)> {
@@ -277,6 +293,12 @@ fn parse_action(node: &Node) -> DynResult<ActionType> {
         }
         "set_tag" => {
             action = parse_set_tag(node)?;
+        }
+	"ignore_alarms" => {
+            action = parse_ignore_alarms(node)?;
+        }
+	"restore_alarms" => {
+            action = parse_restore_alarms(node)?;
         }
         "debug" => {
             action = parse_debug(node)?;
@@ -440,6 +462,17 @@ fn parse_set_tag(node: &Node) -> DynResult<ActionType> {
     Ok(ActionType::SetTag { tag_name, value })
 }
 
+fn parse_ignore_alarms(node: &Node) -> DynResult<ActionType> {
+    let permanent = optional_attribute(node, "permanent")?.unwrap_or(false);
+    let filter = text_content(&node)?;
+    Ok(ActionType::IgnoreAlarms { filter, permanent })
+}
+
+fn parse_restore_alarms(node: &Node) -> DynResult<ActionType> {
+    let filter = text_content(&node)?;
+    Ok(ActionType::RestoreAlarms { filter })
+}
+
 fn parse_debug(node: &Node) -> DynResult<ActionType> {
     let text = text_content(&node)?;
     Ok(ActionType::Debug(text))
@@ -466,8 +499,7 @@ fn parse_tags(parent: &Node) -> DynResult<Vec<String>> {
 }
 
 #[derive(Debug)]
-pub struct AlarmFilterConfig
-{
+pub struct AlarmFilterConfig {
     pub filter_predicate: alarm_filter::BoolOp,
     pub tag_matching: Option<String>,
     pub tag_ignored: Option<String>,
@@ -500,7 +532,14 @@ fn parse_alarms(
                             .into());
                         }
                     };
-                    named_filters.insert(filter_id, AlarmFilterConfig{filter_predicate: op, tag_matching, tag_ignored});
+                    named_filters.insert(
+                        filter_id,
+                        AlarmFilterConfig {
+                            filter_predicate: op,
+                            tag_matching,
+                            tag_ignored,
+                        },
+                    );
                 }
                 _ => {
                     return Err(ConfigError::new(&child, UnexpectedElement).into());

@@ -10,5 +10,7 @@ pub mod tag_setter;
 pub mod set_tag;
 pub mod alarm_dispatcher;
 pub mod wait_alarm;
+pub mod alarm_function;
+pub mod alarm_functions;
 pub mod debug;
 pub mod goto;

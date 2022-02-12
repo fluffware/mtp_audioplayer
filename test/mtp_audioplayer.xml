@@ -31,6 +31,7 @@
     <tag>SoundTimer</tag>
     <tag>Tag1</tag>
     <tag>OnOff</tag>
+    <tag>IgnoreAlarms</tag>
     <!--
 	<toggle tag="AlarmRestart">
 	<alarm_restart/>
@@ -45,8 +46,8 @@
   </tags>
 
   
-  <alarms>
-    <filter id="AlarmsUnacked">
+  <alarms >
+    <filter id="AlarmsUnacked" tag_matching="ActiveAlarms" tag_ignored="IgnoredAlarms">
       AlarmClassName = 'Larm' AND (State = 'in')
     </filter>
     <filter id="AlarmsAcked">
@@ -108,6 +109,18 @@
       </repeat>
     </state>
   </state_machine>
+  <state_machine id="ignore_active">
+    <state id="start">
+      <repeat>
+	<wait_tag ne="0">IgnoreAlarms</wait_tag>
+	<ignore_alarms>AlarmsUnacked</ignore_alarms>
+	<debug>Ignoring</debug>
+	<wait_tag eq="0">IgnoreAlarms</wait_tag>
+	<restore_alarms>AlarmsUnacked</restore_alarms>
+	<debug>Restored</debug>
+      </repeat>
+    </state>
+  </state_machine>
   <state_machine id="alarm">
     <state id="no_alarms">
       <sequence>
@@ -131,6 +144,7 @@
       </repeat>
     </state>
   </state_machine>
+  <!--
   <state_machine id="onoff">
     <state id="on">
       <sequence>
@@ -154,6 +168,7 @@
 	<goto>on</goto>
       </sequence>
     </state>
-
-  </state_machine>
+    </state_machine>
+  -->
+  
 </audioplayer>

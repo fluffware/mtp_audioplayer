@@ -1,6 +1,9 @@
 use crate::actions::action::Action;
 use crate::actions::{
     alarm_dispatcher::{self, AlarmDispatched, AlarmDispatcher},
+    alarm_function::AlarmFunctionAction,
+    alarm_function::AlarmOp,
+    alarm_functions::AlarmFunctions,
     debug::DebugAction,
     goto::GotoAction,
     parallel::ParallelAction,
@@ -51,7 +54,6 @@ where
     S: Clone + BufferSample + Sample,
 {
     let mut conv = Samplerate::new(from_rate, to_rate, channels).unwrap();
-    debug!("Samplerate {} -> {}", from_rate, to_rate);
     let mut input = Vec::<f32>::new();
     let mut out_buffer: Vec<S> = Vec::new();
     let out_block_size = BLOCK_SIZE * to_rate as usize / from_rate as usize + 8 * channels;
@@ -386,6 +388,17 @@ fn action_conf_to_action(
             value.clone(),
             build_data.tag_ctxt.clone(),
         ))),
+        ActionType::IgnoreAlarms { filter, permanent } => Ok(Arc::new(AlarmFunctionAction::new(
+            filter.clone(),
+            build_data.alarm_ctxt.clone(),
+            AlarmOp::Ignore,
+        ))),
+        ActionType::RestoreAlarms { filter } => Ok(Arc::new(AlarmFunctionAction::new(
+            filter.clone(),
+            build_data.alarm_ctxt.clone(),
+            AlarmOp::Restore,
+        ))),
+
         ActionType::Debug(text) => Ok(Arc::new(DebugAction::new(text.clone()))),
     }
 }
@@ -504,36 +517,42 @@ impl AlarmFilterState {
         }
         if self.filter.evaluate(new_alarm) {
             if self.matching.insert(AlarmId::from(new_alarm)) {
-                let count = self.matching.difference(&self.ignore).count();
-                if let Err(err) = self.observers.0.send(count as u32) {
-                    error!("Failed to notify alarm observers: {}", err);
-                }
-                self.update_tags(count, self.ignore.len());
+                self.update_alarm_counts();
             }
         } else {
             if !self.ignore_permanent {
                 self.ignore.remove(&AlarmId::from(new_alarm));
             }
             if self.matching.remove(&AlarmId::from(new_alarm)) {
-                let count = self.matching.difference(&self.ignore).count();
-                if let Err(err) = self.observers.0.send(count as u32) {
-                    error!("Failed to notify alarm observers: {}", err);
-                }
-                self.update_tags(count, self.ignore.len());
+                self.update_alarm_counts();
             }
         }
         Ok(())
     }
 
+    fn matching_count(&self) -> usize {
+        self.matching.difference(&self.ignore).count()
+    }
+
     fn update_tags(&self, matching: usize, ignored: usize) {
         if let Some(tag_setter) = Weak::upgrade(&self.tag_setter) {
             if let Some(tag_matching) = &self.tag_matching {
-                tag_setter.as_ref().set_tag(&tag_matching, &matching.to_string());
+                tag_setter
+                    .as_ref()
+                    .set_tag(&tag_matching, &matching.to_string());
             }
             if let Some(tag_ignored) = &self.tag_ignored {
                 tag_setter.set_tag(&tag_ignored, &ignored.to_string());
             }
         }
+    }
+
+    fn update_alarm_counts(&self) {
+        let count = self.matching_count();
+        if let Err(err) = self.observers.0.send(count as u32) {
+            error!("Failed to notify alarm observers: {}", err);
+        }
+        self.update_tags(count, self.ignore.len());
     }
 }
 
@@ -566,7 +585,7 @@ impl AlarmDispatcher for AlarmContext {
         let filter = filters
             .get_mut(filter_name)
             .ok_or_else(|| alarm_dispatcher::Error::AlarmFilterNotFound)?;
-        let count = filter.matching.len();
+        let count = filter.matching_count();
         let mut rx = filter.observers.1.clone();
         let wait_alarm = Box::pin(async move {
             rx.borrow_and_update(); // Make sure that changed will block until next change
@@ -586,15 +605,40 @@ impl AlarmDispatcher for AlarmContext {
         let filter = filters
             .get_mut(filter_name)
             .ok_or_else(|| alarm_dispatcher::Error::AlarmFilterNotFound)?;
-        Ok(filter.matching.len() as u32)
+        Ok(filter.matching_count() as u32)
     }
 }
 
-pub fn setup_alarms(player_conf: &PlayerConfig, tag_setter: Weak<TagContext>) -> DynResult<AlarmContext> {
+impl AlarmFunctions for AlarmContext {
+    fn ignore_matched_alarms(&self, filter: &str, permanent: bool) {
+        if let Ok(mut filters) = self.alarm_filters.lock() {
+            if let Some(mut filter) = filters.get_mut(filter) {
+                filter.ignore = filter.matching.clone();
+                filter.ignore_permanent = permanent;
+                filter.update_alarm_counts();
+            }
+        }
+    }
+
+    fn restore_ignored_alarms(&self, filter: &str) {
+        if let Ok(mut filters) = self.alarm_filters.lock() {
+            if let Some(mut filter) = filters.get_mut(filter) {
+                filter.ignore = HashSet::new();
+                filter.update_alarm_counts();
+            }
+        }
+    }
+}
+
+pub fn setup_alarms(
+    player_conf: &PlayerConfig,
+    tag_setter: Weak<TagContext>,
+) -> DynResult<AlarmContext> {
     let mut alarm_filters = HashMap::new();
 
     for (name, filter_conf) in &player_conf.named_alarm_filters {
-        let tag_setter = if filter_conf.tag_matching.is_none() && filter_conf.tag_ignored.is_none() {
+        let tag_setter = if filter_conf.tag_matching.is_none() && filter_conf.tag_ignored.is_none()
+        {
             Weak::new()
         } else {
             tag_setter.clone()

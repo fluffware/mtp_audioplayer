@@ -84,7 +84,7 @@ impl From<&AlarmData> for NotifyAlarm {
 }
 
 /// Contains the parts from AlarmData that uniquely identifies an alarm
-#[derive(PartialEq, Eq, Hash, Ord)]
+#[derive(PartialEq, Eq, Hash, Ord, Clone)]
 pub struct AlarmId {
     pub id: i32,
 }

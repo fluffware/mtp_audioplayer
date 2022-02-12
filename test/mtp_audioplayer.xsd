@@ -193,6 +193,27 @@
 	</xs:complexType>
       </xs:element>
       
+       <xs:element name="ignore_alarms">
+	<xs:complexType>
+	  <xs:simpleContent>
+	    <xs:extension base="xs:string">
+	      <xs:attributeGroup ref="action_id_attr"/>
+	      <xs:attribute name="permanent" type="xs:string"/>
+	    </xs:extension>
+	  </xs:simpleContent>
+	</xs:complexType>
+       </xs:element>
+       
+      <xs:element name="restore_alarms">
+	<xs:complexType>
+	  <xs:simpleContent>
+	    <xs:extension base="xs:string">
+	      <xs:attributeGroup ref="action_id_attr"/>
+	    </xs:extension>
+	  </xs:simpleContent>
+	</xs:complexType>
+      </xs:element>
+      
     </xs:choice>
   </xs:group>
   
