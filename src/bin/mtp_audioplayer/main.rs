@@ -12,6 +12,7 @@ use tokio::signal;
 use tokio::time::{timeout, Duration};
 use tokio::sync::mpsc::{UnboundedReceiver};
 use open_pipe::{MessageVariant, WriteTagValue};
+use mtp_audioplayer::{logging, daemon};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync + 'static>>;
 
@@ -138,7 +139,8 @@ fn read_configuration(path: &Path) -> Result<(PlayerConfig, Arc<TagContext>, Arc
 
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt::init();
+    logging::init();
+    daemon::starting();
     let args = env::args_os();
     let mut args = args.skip(1);
     let conf_path_str = if let Some(path) = args.next() {
@@ -202,7 +204,8 @@ async fn main() {
             }
         }
     }
-   
+
+    daemon::ready();
     let mut done = false;
     while !done {
         tokio::select! {
@@ -251,6 +254,6 @@ async fn main() {
 	    }
         }
     }
-
-    info!("Server exiting");
+    
+    daemon::exiting();
 }

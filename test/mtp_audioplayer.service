@@ -1,0 +1,13 @@
+[Unit]
+Description="MTP panel audio player"
+
+
+[Service]
+Type=notify
+NotifyAccess=main
+ExecStart=/home/ksb/projects/mtp_audioplayer/target/debug/mtp_audioplayer /home/ksb/projects/mtp_audioplayer/test/mtp_audioplayer.xml
+RestartSec=5
+Restart=always
+
+[Install]
+WantedBy=default.target
