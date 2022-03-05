@@ -1,4 +1,5 @@
-use crate::actions::action::{Action, DynResult};
+use crate::actions::action::Action;
+use crate::util::error::DynResult;
 use std::sync::{Arc, Mutex};
 use tokio::sync::Notify;
 

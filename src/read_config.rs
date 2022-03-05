@@ -11,6 +11,7 @@ use std::num::NonZeroU32;
 use std::path::Path;
 use std::str::FromStr;
 use std::time::Duration;
+use crate::util::error::DynResult;
 
 #[derive(Debug)]
 pub enum ConfigErrorKind {
@@ -145,7 +146,7 @@ pub struct PlayerConfig {
 }
 
 const NS: &str = "http://www.elektro-kapsel.se/audioplayer/v1";
-type DynResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
+
 
 fn required_attribute<T>(node: &Node, name: &str) -> Result<T, ConfigError>
 where

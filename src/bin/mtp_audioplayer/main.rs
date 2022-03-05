@@ -1,27 +1,29 @@
+use mtp_audioplayer::util::error::DynResult;
 use log::{debug, error, info, warn};
-use mtp_audioplayer::app_config::{self, AlarmContext, TagContext, StateMachineContext};
+use mtp_audioplayer::app_config::{
+    self, AlarmContext, StateMachineContext, TagContext, TagSetRequest,
+};
 use mtp_audioplayer::open_pipe::alarm_data::AlarmData;
 use mtp_audioplayer::open_pipe::connection as open_pipe;
 use mtp_audioplayer::read_config::{self, PlayerConfig};
+use mtp_audioplayer::util::error::DynResultFuture;
+use mtp_audioplayer::{daemon, logging};
+use open_pipe::{MessageVariant, WriteTagValue};
 use std::collections::HashMap;
 use std::env;
 use std::ffi::OsStr;
 use std::path::Path;
 use std::sync::Arc;
 use tokio::signal;
+use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::time::{timeout, Duration};
-use tokio::sync::mpsc::{UnboundedReceiver};
-use open_pipe::{MessageVariant, WriteTagValue};
-use mtp_audioplayer::{logging, daemon};
-
-type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync + 'static>>;
 
 const DEFAULT_CONFIG_FILE: &str = "mtp_audioplayer.xml";
 
 async fn subscribe_tags(
     pipe: &mut open_pipe::Connection,
     tag_names: &mut Vec<String>,
-) -> Result<(String, HashMap<String, String>)> {
+) -> DynResult<(String, HashMap<String, String>)> {
     let mut tag_values = HashMap::<String, String>::new();
 
     let value_tags: Vec<&str> = tag_names.iter().map(|c| c.as_str()).collect();
@@ -52,7 +54,7 @@ async fn subscribe_tags(
     }
     Ok((subscription, tag_values))
 }
-async fn subscribe_alarms(pipe: &mut open_pipe::Connection) -> Result<Vec<AlarmData>> {
+async fn subscribe_alarms(pipe: &mut open_pipe::Connection) -> DynResult<Vec<AlarmData>> {
     debug!("Subcribing alarms");
     let _subscription = pipe.subscribe_alarms().await?;
     let alarms;
@@ -85,57 +87,42 @@ async fn subscribe_alarms(pipe: &mut open_pipe::Connection) -> Result<Vec<AlarmD
     Ok(alarms)
 }
 
-async fn trig_on_tag(tag_ctxt: &Arc<TagContext>, tag_name: &str, tag_value: &str) {
+fn trig_on_tag(tag_ctxt: &Arc<TagContext>, tag_name: &str, tag_value: &str) {
     tag_ctxt.tag_changed(tag_name, tag_value);
 }
 
-async fn handle_msg(
-    pipe: &mut open_pipe::Connection,
-    msg: &open_pipe::Message,
-    tag_ctxt: &Arc<TagContext>,
-    alarm_ctxt: &Arc<AlarmContext>,
-) -> Result<()> {
-    let set_tags = Vec::<WriteTagValue>::new();
-    match &msg.message {
-        MessageVariant::NotifySubscribeTag(notify) => {
-            for notify_tag in &notify.params.tags {
-                trig_on_tag(tag_ctxt, &notify_tag.data.name, &notify_tag.data.value).await;
-            }
-        }
-        MessageVariant::NotifySubscribeAlarm(notify) => {
-            for notify_alarm in &notify.params.alarms {
-                debug!("Received alarm: {:?}", notify_alarm);
-                let alarm_data = AlarmData::from(notify_alarm.clone());
-                if let Err(e) = alarm_ctxt.handle_notification(&alarm_data) {
-                    error!("Failed to handle alarm notification: {}", e);
-                }
-            }
-        }
-        _ => {}
-    }
-    if !set_tags.is_empty() {
-        if let Err(e) = pipe.write_tags(&set_tags).await {
-            error!("Failed to change tags: {}", e);
-        }
-    }
-    Ok(())
-}
-
-fn read_configuration(path: &Path) -> Result<(PlayerConfig, Arc<TagContext>, Arc<AlarmContext>, StateMachineContext, UnboundedReceiver<(String,String)>)> {
+fn read_configuration(
+    path: &Path,
+) -> DynResult<(
+    PlayerConfig,
+    Arc<TagContext>,
+    Arc<AlarmContext>,
+    StateMachineContext,
+    UnboundedReceiver<TagSetRequest>,
+)> {
     let app_conf = read_config::read_file(path)?;
     let base_dir = Path::new(path)
         .parent()
         .ok_or("Configuration file has no parent")?;
 
-     let (pipe_send_tx, pipe_send_rx) = tokio::sync::mpsc::unbounded_channel::<(String, String)>();
+    let (pipe_send_tx, pipe_send_rx) = tokio::sync::mpsc::unbounded_channel::<TagSetRequest>();
     let playback_ctxt = app_config::setup_clip_playback(&app_conf, base_dir)?;
     let tag_ctxt = app_config::setup_tags(&app_conf, pipe_send_tx)?;
     let tag_ctxt = Arc::new(tag_ctxt);
     let alarm_ctxt = app_config::setup_alarms(&app_conf, Arc::downgrade(&tag_ctxt))?;
     let alarm_ctxt = Arc::new(alarm_ctxt);
-    let state_machine_ctxt = app_config::setup_state_machines(&app_conf, &playback_ctxt, &tag_ctxt, &alarm_ctxt)?;
-    Ok((app_conf, tag_ctxt, alarm_ctxt, state_machine_ctxt, pipe_send_rx))
+    let state_machine_ctxt =
+        app_config::setup_state_machines(&app_conf, &playback_ctxt, &tag_ctxt, &alarm_ctxt)?;
+    Ok((
+        app_conf,
+        tag_ctxt,
+        alarm_ctxt,
+        state_machine_ctxt,
+        pipe_send_rx,
+    ))
 }
+
+type MessageHandler = Box<dyn FnMut(&open_pipe::Message) -> DynResult<bool>>;
 
 #[tokio::main]
 async fn main() {
@@ -172,7 +159,7 @@ async fn main() {
 
     let running_sm = state_machine_ctxt.run_all();
     tokio::pin!(running_sm);
-    
+
     let mut tag_names: Vec<String> = tag_ctxt.tag_names();
     match subscribe_tags(&mut pipe, &mut tag_names).await {
         Err(e) => {
@@ -204,6 +191,31 @@ async fn main() {
             }
         }
     }
+    let mut handler_list = Vec::<MessageHandler>::new();
+
+    // Handle NotifySubscribeTag message
+    handler_list.push(Box::new(|msg: &open_pipe::Message| {
+        if let MessageVariant::NotifySubscribeTag(notify) = &msg.message {
+            for notify_tag in &notify.params.tags {
+                trig_on_tag(&tag_ctxt, &notify_tag.data.name, &notify_tag.data.value);
+            }
+        }
+        Ok(true)
+    }));
+
+    // Handle NotifySubscribeAlarm message
+    handler_list.push(Box::new(|msg: &open_pipe::Message| {
+        if let MessageVariant::NotifySubscribeAlarm(notify) = &msg.message {
+            for notify_alarm in &notify.params.alarms {
+                debug!("Received alarm: {:?}", notify_alarm);
+                let alarm_data = AlarmData::from(notify_alarm.clone());
+                if let Err(e) = alarm_ctxt.handle_notification(&alarm_data) {
+                    error!("Failed to handle alarm notification: {}", e);
+                }
+            }
+        }
+        Ok(true)
+    }));
 
     daemon::ready();
     let mut done = false;
@@ -217,10 +229,31 @@ async fn main() {
             },
             res = pipe_send_rx.recv() => {
                 match res {
-                    Some((name, value)) => {
-                        if let Err(e) = pipe.write_tags(&[WriteTagValue{name, value}]).await {
+                    Some(req) => {
+                        let write_tag = WriteTagValue {
+                            name: req.tag_name.clone(),
+                            value: req.value
+                        };
+                        if let Err(e) = pipe.write_tags(&[write_tag]).await {
                             error!("Failed to write tag to pipe: {}",e);
                         }
+                        let mut done = Some(req.done);
+            let name = req.tag_name;
+            // Queue a handler that waits for the write to be confirmed
+                        handler_list.push(Box::new(move |msg: &open_pipe::Message| {
+                            if let MessageVariant::NotifyWriteTag(notify) = &msg.message {
+                for tag in &notify.params.tags {
+                    if tag.name == name {
+                    let _ = done.take().unwrap().send(Ok(()));
+                    return Ok(false)
+                    }
+                }
+                Ok(true)
+                            } else {
+                                Ok(!done.as_ref().unwrap().is_closed())
+                            }
+                        }
+                        ));
                     }
                     None => {}
                 }
@@ -231,29 +264,40 @@ async fn main() {
                         done = true
                     },
                     Ok(msg) => {
-                        if let Err(e) =
-                            handle_msg(&mut pipe, &msg,
-                                       &tag_ctxt, &alarm_ctxt).await {
-                                error!("Failed to handle Open Pipe message: {}",e);
-                                return;
+                        let mut i = 0;
+                        while i < handler_list.len() {
+                            match handler_list[i](&msg) {
+                                Ok(again) => {
+                                    if again {
+                                        i += 1;
+                                    } else {
+                                        let _ = handler_list.remove(i);
+                                    }
+                                },
+                                Err(e) => {
+                                    error!("Failed to handle Open Pipe message: {}",e);
+                                    return;
+                                }
                             }
+                        }
                     }
                 }
             }
-	    res = &mut running_sm => {
-		match res {
-		    Ok(_) => {
-			error!("State machine stopped");
-			done = true;
-		    }
-		    Err(err) => {
-			error!("State machine error: {}", err);
+
+            res = &mut running_sm => {
+                match res {
+                    Ok(_) => {
+                        error!("State machine stopped");
+                        done = true;
+                    }
+                    Err(err) => {
+                        error!("State machine error: {}", err);
                         return;
-		    }
-		}
-	    }
+                    }
+                }
+            }
         }
     }
-    
+
     daemon::exiting();
 }

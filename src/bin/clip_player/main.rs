@@ -1,6 +1,7 @@
 use clap::{App, Arg, SubCommand};
 use cpal::SampleFormat;
 use log::error;
+use mtp_audioplayer::util::error::DynResult;
 use mtp_audioplayer::{
     app_config, clip_player::ClipPlayer, read_config, read_config::PlayerConfig,
     sample_buffer::SampleBuffer,
@@ -31,8 +32,6 @@ fn adjust_volume(volume: f64, buffer: &mut [i16])
     }
 }
 */
-
-type DynResult<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync + 'static>>;
 
 #[tokio::main]
 async fn main() {

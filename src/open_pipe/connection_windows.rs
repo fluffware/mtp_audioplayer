@@ -1,4 +1,5 @@
-use log::{error,debug};
+use crate::util::error::DynResult;
+use log::{debug, error};
 use std::future::Future;
 use std::io;
 use tokio::io::Interest;
@@ -9,19 +10,16 @@ use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::time::{self, Duration};
 use winapi::shared::winerror;
 
-pub type DynResult<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync + 'static>>;
-
 pub struct ConnectionWindows {
     send: Sender<Vec<u8>>,
     recv: Receiver<Vec<u8>>,
 }
 
-fn find_eol(a: &[u8], start: usize) -> Option<usize>
-{
-    for p in start .. a.len() {
+fn find_eol(a: &[u8], start: usize) -> Option<usize> {
+    for p in start..a.len() {
         let c = a[p];
         if c == b'\r' || c == b'\n' {
-            return Some(p)
+            return Some(p);
         }
     }
     None
@@ -68,7 +66,7 @@ macro_rules! rw_pipe_def {
                                                         read_buffer.clear();
                                                     } else {
                                                         read_buffer.drain(0..start);
-                                                    }   
+                                                    }
                                                     start =0;
                                                     pos = 0;
                                                 } else {
@@ -172,7 +170,7 @@ impl ConnectionWindows {
         tokio::spawn(async move {
             if let Err(e) = rw_pipe_client(client, recv_tx, send_rx).await {
                 error!("Client thread failed: {}", e);
-            } 
+            }
         });
         let conn = ConnectionWindows {
             send: send_tx,

@@ -12,7 +12,7 @@ use crate::actions::{
     sequence::SequenceAction,
     set_tag::SetTagAction,
     tag_dispatcher::{self, TagDispatched, TagDispatcher},
-    tag_setter::TagSetter,
+    tag_setter::{TagSetFuture, TagSetter},
     wait::WaitAction,
     wait_alarm::WaitAlarmAction,
     wait_tag::WaitTagAction,
@@ -24,6 +24,7 @@ use crate::open_pipe::alarm_data::AlarmId;
 use crate::read_config::ActionType;
 use crate::sample_buffer::{Sample as BufferSample, SampleBuffer};
 use crate::state_machine::StateMachine;
+use crate::util::error::DynResult;
 use crate::{
     clip_player::ClipPlayer,
     read_config::{ClipType, PlayerConfig},
@@ -36,9 +37,10 @@ use std::io::Read;
 use std::path::Path;
 use std::sync::{Arc, Mutex, Weak};
 use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::oneshot;
 use tokio::sync::watch;
+use tokio::time::{timeout, Duration};
 
-type DynResult<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 const BLOCK_SIZE: usize = 1024;
 
 fn convert_samples<S, R>(
@@ -403,6 +405,12 @@ fn action_conf_to_action(
     }
 }
 
+pub struct TagSetRequest {
+    pub tag_name: String,
+    pub value: String,
+    pub done: oneshot::Sender<DynResult<()>>,
+}
+
 struct TagObservable {
     state: Option<String>,
     observers: (watch::Sender<String>, watch::Receiver<String>),
@@ -410,11 +418,11 @@ struct TagObservable {
 
 pub struct TagContext {
     tags: Mutex<HashMap<String, TagObservable>>,
-    tag_send_tx: UnboundedSender<(String, String)>,
+    tag_send_tx: UnboundedSender<TagSetRequest>,
 }
 
 impl TagContext {
-    pub fn new(tag_send_tx: UnboundedSender<(String, String)>) -> TagContext {
+    pub fn new(tag_send_tx: UnboundedSender<TagSetRequest>) -> TagContext {
         TagContext {
             tags: Mutex::new(HashMap::new()),
             tag_send_tx,
@@ -440,11 +448,18 @@ impl TagContext {
 }
 
 impl TagSetter for TagContext {
-    fn set_tag(&self, tag_name: &str, value: &str) {
+    fn set_tag(&self, tag_name: &str, value: &str) -> TagSetFuture {
         self.tag_changed(tag_name, value);
-        let _ = self
-            .tag_send_tx
-            .send((tag_name.to_string(), value.to_string()));
+        let (done_send, done_recv) = oneshot::channel();
+        let req = TagSetRequest {
+            tag_name: tag_name.to_string(),
+            value: value.to_string(),
+            done: done_send,
+        };
+        if let Err(_) = self.tag_send_tx.send(req) {
+            return Box::pin(std::future::ready(Err("Failed to queue request".into())));
+        }
+        Box::pin(async move { timeout(Duration::from_millis(500), done_recv).await?? })
     }
 }
 
@@ -481,7 +496,7 @@ impl TagDispatcher for TagContext {
 
 pub fn setup_tags(
     player_conf: &PlayerConfig,
-    tag_send_tx: UnboundedSender<(String, String)>,
+    tag_send_tx: UnboundedSender<TagSetRequest>,
 ) -> DynResult<TagContext> {
     let tag_ctxt = TagContext::new(tag_send_tx);
     {

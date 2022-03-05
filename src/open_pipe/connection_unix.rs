@@ -1,16 +1,15 @@
+use crate::util::error::DynResult;
 use log::{debug, error, warn};
 use std::fs::{create_dir_all, remove_file};
 use std::future::Future;
 use std::path::Path;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::AsyncRead;
+use tokio::io::AsyncWriteExt;
 use tokio::io::BufReader;
 use tokio::net::{unix::OwnedWriteHalf, UnixListener, UnixStream};
 use tokio::pin;
 use tokio::sync::mpsc::{self, Receiver, Sender};
-use tokio::io::AsyncWriteExt;
-
-pub type DynResult<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync + 'static>>;
 
 pub struct ConnectionUnix {
     stream: OwnedWriteHalf,
@@ -64,38 +63,37 @@ impl ConnectionUnix {
         pin!(shutdown);
         loop {
             tokio::select! {
-		res = listener.accept() => {
-                    if let Ok((stream, _addr)) = res {
-			let conn = ConnectionUnix::from_stream(stream);
-			tokio::spawn(handler(conn));
-                    } else {
-			error!("Failed to accept connection");
-                    }
-		},
-		_ = (&mut shutdown) => break
-            }
+            res = listener.accept() => {
+                        if let Ok((stream, _addr)) = res {
+                let conn = ConnectionUnix::from_stream(stream);
+                tokio::spawn(handler(conn));
+                        } else {
+                error!("Failed to accept connection");
+                        }
+            },
+            _ = (&mut shutdown) => break
+                }
         }
-	if let Err(e) = remove_file(path) {
-	    warn!("Failed to delete named pipe {}: {}", path, e);
-	}
+        if let Err(e) = remove_file(path) {
+            warn!("Failed to delete named pipe {}: {}", path, e);
+        }
 
-	debug!("Server exited");
-	Ok(())
+        debug!("Server exited");
+        Ok(())
     }
 
     pub async fn client(path: &str) -> DynResult<ConnectionUnix> {
         let stream = UnixStream::connect(path).await?;
         Ok(Self::from_stream(stream))
-	    
     }
 
     pub async fn send_data(&mut self, data: &[u8]) -> DynResult<()> {
-	self.stream.write_all(data).await?;
-	self.stream.flush().await?;
-	Ok(())
+        self.stream.write_all(data).await?;
+        self.stream.flush().await?;
+        Ok(())
     }
 
     pub async fn recv_data(&mut self) -> DynResult<Vec<u8>> {
-	self.recv.recv().await.ok_or("Receiver queue closed".into())
+        self.recv.recv().await.ok_or("Receiver queue closed".into())
     }
 }

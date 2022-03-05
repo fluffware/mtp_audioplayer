@@ -78,7 +78,9 @@
       <repeat>
 	<wait_tag ne="0">SoundExe</wait_tag>
 	<play>A</play>
+	<debug>SoundExe reseting</debug>
 	<set_tag tag="SoundExe">0</set_tag>
+	<debug>SoundExe reset</debug>
       </repeat>
       <repeat>
 	<wait_tag changed="1">SoundInc</wait_tag>

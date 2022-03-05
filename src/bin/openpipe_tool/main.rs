@@ -20,8 +20,8 @@ use warp::{Filter, Reply};
 use std::net::IpAddr;
 use std::env;
 use std::path::{PathBuf};
+use mtp_audioplayer::util::error::DynResult;
 
-pub type DynResult<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync + 'static>>;
 
 async fn open_pipe_handler(
     mut conn: Connection,

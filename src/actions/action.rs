@@ -1,9 +1,7 @@
-use std::error::Error;
-use std::future::Future;
-use std::pin::Pin;
+use crate::util::error::DynResultFuture;
 
-pub type DynResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
-pub type ActionFuture = Pin<Box<dyn Future<Output = DynResult<()>> + Send>>;
+pub type ActionFuture = DynResultFuture<()>;
+
 pub trait Action {
     fn run(&self) -> ActionFuture;
 }

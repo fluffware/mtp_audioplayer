@@ -36,7 +36,6 @@ where
     fn run(&self) -> ActionFuture {
         self.tag_setter
             .as_ref()
-            .set_tag(&self.tag_name, &self.value);
-        Box::pin(std::future::ready(Ok(())))
+            .set_tag(&self.tag_name, &self.value)
     }
 }
