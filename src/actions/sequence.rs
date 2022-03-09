@@ -28,7 +28,7 @@ impl Action for SequenceAction {
         let actions = self.actions.clone(); // Make a snapshot of the actions
         Box::pin(async move {
             for a in actions {
-		a.run().await?;
+                a.run().await?;
             }
             Ok(())
         })

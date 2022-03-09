@@ -3,7 +3,7 @@ use super::connection::{
     ErrorInfo, Message, MessageVariant, NotifyAlarm, NotifyAlarms, ParamWrapperCap,
     SubscribeAlarmParams,
 };
-use log::{error, warn, debug};
+use log::{debug, error, warn};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, Weak};
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync + 'static>>;
@@ -83,8 +83,9 @@ impl AlarmServer {
             ),
             client_cookie: subscr.cookie.clone(),
         };
-	self.subscriptions.insert(cookie.to_string(), Arc::new(Mutex::new(subscr)));
-	debug!("Added subscriber {}", cookie);
+        self.subscriptions
+            .insert(cookie.to_string(), Arc::new(Mutex::new(subscr)));
+        debug!("Added subscriber {}", cookie);
         msg
     }
 
@@ -106,14 +107,14 @@ impl AlarmServer {
     }
 
     fn notify_subscribe(&mut self, params: NotifyAlarms, cookie: &str) {
-	debug!("notify_subscribe: {}", cookie);
+        debug!("notify_subscribe: {}", cookie);
         let alarms: Vec<AlarmData> = params
             .alarms
             .into_iter()
             .map(|alarm| AlarmData::from(alarm))
             .collect();
         for (subscr_cookie, subscr) in &self.subscriptions {
-	    debug!("subscr: {}", subscr_cookie);
+            debug!("subscr: {}", subscr_cookie);
             let subscr = subscr.lock().unwrap();
             if subscr_cookie != cookie {
                 let notify = Self::build_notify_alarms(
@@ -135,7 +136,10 @@ impl AlarmServer {
             }
         }
         for alarm in alarms {
-            match self.alarms.binary_search_by(|a| AlarmId::from(a).cmp(&AlarmId::from(&alarm))) {
+            match self
+                .alarms
+                .binary_search_by(|a| AlarmId::from(a).cmp(&AlarmId::from(&alarm)))
+            {
                 Ok(p) => {
                     if alarm.state != 128 {
                         self.alarms[p].state = alarm.state;

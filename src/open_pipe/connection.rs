@@ -1,7 +1,7 @@
-use std::future::Future;
-use log::{debug};
+use log::debug;
 use serde::{Deserialize, Serialize};
 use serde_json;
+use std::future::Future;
 use std::process;
 
 use super::ConnectionLowLevel;
@@ -200,12 +200,12 @@ async fn send_cmd(stream: &mut ConnectionLowLevel, cmd: &Message) -> Result<()> 
     let mut cmd_bytes = Vec::new();
     for c in cmd_str.chars() {
         if c >= '\u{0080}' {
-            cmd_bytes.extend_from_slice(format!("\\u{:04x}",c as u16).as_bytes());
+            cmd_bytes.extend_from_slice(format!("\\u{:04x}", c as u16).as_bytes());
         } else {
-        cmd_bytes.push(c as u8);
+            cmd_bytes.push(c as u8);
         }
     }
-  
+
     cmd_bytes.push(b'\n');
     debug!("Cmd: {}", String::from_utf8(cmd_bytes.clone()).unwrap());
     stream.send_data(&cmd_bytes).await?;
@@ -352,7 +352,12 @@ where
     F: Future<Output = ()> + Send + 'static,
     S: Future<Output = ()> + Send + 'static,
 {
-    ConnectionLowLevel::server(path, move |conn| handle_connection(conn, &handler), shutdown).await?;
+    ConnectionLowLevel::server(
+        path,
+        move |conn| handle_connection(conn, &handler),
+        shutdown,
+    )
+    .await?;
     Ok(())
 }
 

@@ -1,7 +1,6 @@
 use log::info;
 
-pub fn init_logging()
-{
+pub fn init_logging() {
     tracing_subscriber::fmt::init();
 }
 

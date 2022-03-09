@@ -1,7 +1,7 @@
 use crate::actions::action::{Action, ActionFuture};
 use crate::actions::tag_dispatcher::TagDispatcher;
-use std::sync::Arc;
 use std::num::ParseFloatError;
+use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub enum TagCondition {
@@ -17,13 +17,12 @@ pub enum TagCondition {
 }
 
 /// Parse float and map true and false to 1 and 0 respectively
-fn parse_number(num_str: &str) -> Result<f64, ParseFloatError>
-{
+fn parse_number(num_str: &str) -> Result<f64, ParseFloatError> {
     let lower = num_str.to_lowercase();
     match lower.as_str() {
         "true" => Ok(1.0),
         "false" => Ok(0.0),
-        _ => num_str.parse::<f64>()
+        _ => num_str.parse::<f64>(),
     }
 }
 

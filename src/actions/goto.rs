@@ -5,14 +5,11 @@ use std::sync::Weak;
 
 pub struct GotoAction {
     state_index: usize,
-    state_machine: Weak<StateMachine>
+    state_machine: Weak<StateMachine>,
 }
 
 impl GotoAction {
-    pub fn new(
-        state_index: usize,
-        state_machine: Weak<StateMachine>
-    ) -> GotoAction {
+    pub fn new(state_index: usize, state_machine: Weak<StateMachine>) -> GotoAction {
         GotoAction {
             state_index,
             state_machine,

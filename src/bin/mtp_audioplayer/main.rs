@@ -1,4 +1,3 @@
-use mtp_audioplayer::util::error::DynResult;
 use log::{debug, error, info, warn};
 use mtp_audioplayer::app_config::{
     self, AlarmContext, StateMachineContext, TagContext, TagSetRequest,
@@ -6,6 +5,7 @@ use mtp_audioplayer::app_config::{
 use mtp_audioplayer::open_pipe::alarm_data::AlarmData;
 use mtp_audioplayer::open_pipe::connection as open_pipe;
 use mtp_audioplayer::read_config::{self, PlayerConfig};
+use mtp_audioplayer::util::error::DynResult;
 use mtp_audioplayer::util::error::DynResultFuture;
 use mtp_audioplayer::{daemon, logging};
 use open_pipe::{MessageVariant, WriteTagValue};
@@ -238,7 +238,7 @@ async fn main() {
                             error!("Failed to write tag to pipe: {}",e);
                         }
                         let mut done = Some(req.done);
-            let name = req.tag_name;
+                        let name = req.tag_name;
             // Queue a handler that waits for the write to be confirmed
                         handler_list.push(Box::new(move |msg: &open_pipe::Message| {
                             if let MessageVariant::NotifyWriteTag(notify) = &msg.message {

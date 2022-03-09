@@ -231,11 +231,11 @@ fn test_subscribe() {
         println!("Notify: {:?}", msg);
         Ok(())
     }));
-    
+
     server.subscribe(
         &["Tag0".to_string(), "Tag1".to_string()],
         "dsjalk",
-        Arc::downgrade(&notify)
+        Arc::downgrade(&notify),
     );
     server.set_tag_value("Tag1", "2", &mut notifications);
     server.send_tag_notifications(&notifications, None);

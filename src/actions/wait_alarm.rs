@@ -35,7 +35,11 @@ impl<D> WaitAlarmAction<D>
 where
     D: AlarmDispatcher + Send,
 {
-    pub fn new(filter_name: String, condition: AlarmCondition, dispatcher: Arc<D>) -> WaitAlarmAction<D> {
+    pub fn new(
+        filter_name: String,
+        condition: AlarmCondition,
+        dispatcher: Arc<D>,
+    ) -> WaitAlarmAction<D> {
         WaitAlarmAction {
             filter_name,
             dispatcher,

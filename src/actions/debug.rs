@@ -15,7 +15,7 @@ impl Action for DebugAction {
     fn run(&self) -> ActionFuture {
         let text = self.text.clone();
         Box::pin(async move {
-	    debug!("{}", text);
+            debug!("{}", text);
             Ok(())
         })
     }

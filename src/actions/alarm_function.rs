@@ -1,11 +1,11 @@
+use super::alarm_functions::AlarmFunctions;
 use crate::actions::action::{Action, ActionFuture};
 use std::marker::PhantomData;
-use super::alarm_functions::AlarmFunctions;
 
 #[derive(Debug)]
-pub enum AlarmOp{
+pub enum AlarmOp {
     Ignore,
-    Restore
+    Restore,
 }
 
 pub struct AlarmFunctionAction<S, T>
@@ -27,8 +27,8 @@ where
     pub fn new(filter: String, alarm_functions: S, op: AlarmOp) -> AlarmFunctionAction<S, T> {
         AlarmFunctionAction {
             filter,
-	    alarm_functions,
-	    op,
+            alarm_functions,
+            op,
             phantom: PhantomData,
         }
     }
@@ -40,18 +40,18 @@ where
     T: AlarmFunctions,
 {
     fn run(&self) -> ActionFuture {
-	match self.op {
-	    AlarmOp::Ignore => {
-		self.alarm_functions
-		    .as_ref()
-		    .ignore_matched_alarms(&self.filter, false);
-	    }
-	    AlarmOp::Restore => {
-		self.alarm_functions
-		    .as_ref()
-		    .restore_ignored_alarms(&self.filter);
-	    }
-	}
+        match self.op {
+            AlarmOp::Ignore => {
+                self.alarm_functions
+                    .as_ref()
+                    .ignore_matched_alarms(&self.filter, false);
+            }
+            AlarmOp::Restore => {
+                self.alarm_functions
+                    .as_ref()
+                    .restore_ignored_alarms(&self.filter);
+            }
+        }
         Box::pin(std::future::ready(Ok(())))
     }
 }

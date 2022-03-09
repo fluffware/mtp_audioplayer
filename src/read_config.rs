@@ -1,6 +1,7 @@
 use crate::actions::wait_alarm::AlarmCondition;
 use crate::actions::wait_tag::TagCondition;
 use crate::alarm_filter;
+use crate::util::error::DynResult;
 use cpal::SampleFormat;
 use roxmltree::{Document, Node, TextPos};
 use std::collections::HashMap;
@@ -11,7 +12,6 @@ use std::num::NonZeroU32;
 use std::path::Path;
 use std::str::FromStr;
 use std::time::Duration;
-use crate::util::error::DynResult;
 
 #[derive(Debug)]
 pub enum ConfigErrorKind {
@@ -146,7 +146,6 @@ pub struct PlayerConfig {
 }
 
 const NS: &str = "http://www.elektro-kapsel.se/audioplayer/v1";
-
 
 fn required_attribute<T>(node: &Node, name: &str) -> Result<T, ConfigError>
 where
@@ -295,10 +294,10 @@ fn parse_action(node: &Node) -> DynResult<ActionType> {
         "set_tag" => {
             action = parse_set_tag(node)?;
         }
-	"ignore_alarms" => {
+        "ignore_alarms" => {
             action = parse_ignore_alarms(node)?;
         }
-	"restore_alarms" => {
+        "restore_alarms" => {
             action = parse_restore_alarms(node)?;
         }
         "debug" => {

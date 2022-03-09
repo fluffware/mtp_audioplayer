@@ -1,3 +1,4 @@
+use crate::sample_buffer::{self, AsSampleSlice, SampleBuffer};
 use cpal::traits::DeviceTrait;
 use cpal::traits::HostTrait;
 use cpal::traits::StreamTrait;
@@ -18,7 +19,6 @@ use std::sync::Arc;
 use std::sync::{Condvar, Mutex, MutexGuard};
 use std::task::{Context, Poll, Waker};
 use std::thread;
-use crate::sample_buffer::{self, SampleBuffer, AsSampleSlice};
 
 #[derive(Debug, Clone)]
 pub struct ClipPlayer {
@@ -99,7 +99,10 @@ enum PlaybackState {
     Setup, // Initializing playback thread
     Ready, // Ready to play samples. Set by thread
     // Play samples. Set by client
-    Playing { seqno: u32, samples: Arc<SampleBuffer> },
+    Playing {
+        seqno: u32,
+        samples: Arc<SampleBuffer>,
+    },
     Cancel,       // Cancel current playback. Set by client
     Error(Error), // Set by thread. Set to Ready to clear
     Shutdown,     // Tell the thread to exit.
@@ -171,7 +174,10 @@ fn generate_samples<S>(
     buffer: &mut [S],
     current_seqno: &mut u32,
     pos: &mut usize,
-) where S: sample_buffer::Sample + Copy, SampleBuffer: AsSampleSlice<S> {
+) where
+    S: sample_buffer::Sample + Copy,
+    SampleBuffer: AsSampleSlice<S>,
+{
     if let Ok(mut state) = ctrl.state.lock() {
         match &mut *state {
             PlaybackState::Playing { seqno, samples } => {
@@ -217,8 +223,15 @@ fn generate_samples<S>(
     }
 }
 
-fn build_output_stream<S>(device: Device, stream_config: &StreamConfig, sample_format: SampleFormat, ctrl_cb: Arc<PlaybackControl>) -> Result<Stream, BuildStreamError>
-where S: cpal::Sample + Copy + sample_buffer::Sample, SampleBuffer: AsSampleSlice<S>
+fn build_output_stream<S>(
+    device: Device,
+    stream_config: &StreamConfig,
+    sample_format: SampleFormat,
+    ctrl_cb: Arc<PlaybackControl>,
+) -> Result<Stream, BuildStreamError>
+where
+    S: cpal::Sample + Copy + sample_buffer::Sample,
+    SampleBuffer: AsSampleSlice<S>,
 {
     let mut current_seqno = 0;
     let mut pos = 0;
@@ -234,15 +247,24 @@ where S: cpal::Sample + Copy + sample_buffer::Sample, SampleBuffer: AsSampleSlic
         },
     )
 }
-fn playback_thread(device: Device, stream_config: StreamConfig, sample_format: SampleFormat, ctrl: Arc<PlaybackControl>) {
-   
+fn playback_thread(
+    device: Device,
+    stream_config: StreamConfig,
+    sample_format: SampleFormat,
+    ctrl: Arc<PlaybackControl>,
+) {
     let ctrl_cb = ctrl.clone();
     let stream = match match sample_format {
-        SampleFormat::I16 => build_output_stream::<i16>(device, &stream_config, sample_format, ctrl_cb),
-        SampleFormat::U16 => build_output_stream::<u16>(device, &stream_config, sample_format, ctrl_cb),
-        SampleFormat::F32 => build_output_stream::<f32>(device, &stream_config, sample_format, ctrl_cb),
-    }
-     {
+        SampleFormat::I16 => {
+            build_output_stream::<i16>(device, &stream_config, sample_format, ctrl_cb)
+        }
+        SampleFormat::U16 => {
+            build_output_stream::<u16>(device, &stream_config, sample_format, ctrl_cb)
+        }
+        SampleFormat::F32 => {
+            build_output_stream::<f32>(device, &stream_config, sample_format, ctrl_cb)
+        }
+    } {
         Ok(s) => s,
         Err(e) => {
             error!("Failed to initiate audio playback: {}", e);
@@ -326,7 +348,12 @@ fn supports_samplerate(conf: &SupportedStreamConfigRange, rate: u32) -> bool {
 static NEXT_SEQ_NO: AtomicU32 = AtomicU32::new(1);
 
 impl ClipPlayer {
-    pub fn new(pcm_name: &str, rate: u32, channels: u8, sample_format: SampleFormat) -> Result<ClipPlayer, Error> {
+    pub fn new(
+        pcm_name: &str,
+        rate: u32,
+        channels: u8,
+        sample_format: SampleFormat,
+    ) -> Result<ClipPlayer, Error> {
         let channels = channels as u16;
         let host = cpal::default_host();
         let device = if pcm_name == "default" {
@@ -368,17 +395,21 @@ impl ClipPlayer {
             } else {
                 best_fit = Some(conf);
             }
-
         }
 
-        let best_fit = best_fit.ok_or_else(|| Error::NoMatchinConfig("No suitable configuration found".to_string()))?;
+        let best_fit = best_fit
+            .ok_or_else(|| Error::NoMatchinConfig("No suitable configuration found".to_string()))?;
         if best_fit.channels() != channels {
-            return Err(Error::NoMatchinConfig(
-                format!("No configuration with {} channels found", channels)));
+            return Err(Error::NoMatchinConfig(format!(
+                "No configuration with {} channels found",
+                channels
+            )));
         }
         if !supports_samplerate(&best_fit, rate) {
-            return Err(Error::NoMatchinConfig(
-                format!("No configuration that supports {} samples/s found", rate)));
+            return Err(Error::NoMatchinConfig(format!(
+                "No configuration that supports {} samples/s found",
+                rate
+            )));
         }
         if best_fit.sample_format() != sample_format {
             return Err(Error::NoMatchinConfig(

@@ -14,14 +14,13 @@ use std::sync::{Arc, Mutex, Weak};
 use tokio::signal;
 use tokio::sync::mpsc::UnboundedSender;
 //use tokio::time::{timeout, Duration};
+use mtp_audioplayer::util::error::DynResult;
+use std::env;
+use std::net::IpAddr;
+use std::path::PathBuf;
 use tokio_util::sync::CancellationToken;
 use warp::ws::Message as WsMessage;
 use warp::{Filter, Reply};
-use std::net::IpAddr;
-use std::env;
-use std::path::{PathBuf};
-use mtp_audioplayer::util::error::DynResult;
-
 
 async fn open_pipe_handler(
     mut conn: Connection,
@@ -277,10 +276,10 @@ fn setup_server(
     let tag_server_web = tag_server.clone();
     let alarm_server_web = alarm_server.clone();
     Arc::new(move |ws: warp::ws::Ws| {
-            // And then our closure will be called when it completes...
-            let tag_server = tag_server_web.clone();
-            let alarm_server = alarm_server_web.clone();
-            Box::new(ws.on_upgrade(|websocket| async move {
+        // And then our closure will be called when it completes...
+        let tag_server = tag_server_web.clone();
+        let alarm_server = alarm_server_web.clone();
+        Box::new(ws.on_upgrade(|websocket| async move {
                 let (mut tx, rx) = websocket.split();
                 let (send_tx, mut recv_tx) =
                     tokio::sync::mpsc::unbounded_channel::<connection::Message>();
@@ -312,7 +311,7 @@ fn setup_server(
                         let notify_weak = notify_weak.clone();
                         let mut send_tx = send_tx.clone();
                         let tag_server = tag_server.clone();
-                        let alarm_server = alarm_server.clone(); 
+                        let alarm_server = alarm_server.clone();
                         async move {
                             println!("Msg: {:?}",res);
                             if let Ok(msg) = res {
@@ -322,7 +321,7 @@ fn setup_server(
                     }) => {}
                 }
             }))
-        })
+    })
 }
 
 #[cfg(target_os = "linux")]
@@ -352,7 +351,7 @@ async fn main() {
         .arg(
             Arg::with_name("file-root")
                 .long("file-root")
-                .takes_value(true)
+                .takes_value(true),
         )
         .arg(
             Arg::with_name("pipe")
@@ -386,8 +385,9 @@ async fn main() {
         let shutdown = shutdown.clone();
         open_pipe_connection = tokio::spawn(async move {
             shutdown.cancelled().await;
-            Ok(()) 
-        }).fuse()
+            Ok(())
+        })
+        .fuse()
     } else {
         let tag_server = Arc::new(Mutex::new(TagServer::new(true)));
         let alarm_server = Arc::new(Mutex::new(AlarmServer::new()));
@@ -424,7 +424,7 @@ async fn main() {
         error!("{} does not exist", index_file.to_string_lossy());
         return;
     }
-    
+
     let ws_filter = warp::path("open_pipe")
         .and(warp::ws())
         .map(move |ws: warp::ws::Ws| ws_run(ws));
@@ -440,11 +440,11 @@ async fn main() {
                 return;
             }
         },
-    None => {
+        None => {
             error!("No value for HTTP port");
             return;
         }
-};
+    };
     let mut web_server = tokio::spawn(
         web_server
             .bind_with_graceful_shutdown((http_bind, http_port), async move {
