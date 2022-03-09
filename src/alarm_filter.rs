@@ -258,6 +258,7 @@ impl Display for FilterErrorKind {
 
 #[derive(Debug)]
 pub struct FilterError<'a> {
+    #[allow(dead_code)]
     input: &'a str,
     kind: FilterErrorKind,
 }

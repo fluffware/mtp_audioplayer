@@ -103,10 +103,11 @@ enum PlaybackState {
         seqno: u32,
         samples: Arc<SampleBuffer>,
     },
-    Cancel,       // Cancel current playback. Set by client
+    Cancel, // Cancel current playback. Set by client
+    #[allow(dead_code)]
     Error(Error), // Set by thread. Set to Ready to clear
-    Shutdown,     // Tell the thread to exit.
-    Done,         // The thread has exited
+    Shutdown, // Tell the thread to exit.
+    Done,   // The thread has exited
 }
 
 impl std::fmt::Display for PlaybackState {

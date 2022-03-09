@@ -1,4 +1,4 @@
-use clap::{App, Arg};
+use clap::{Arg, Command};
 use futures::stream::StreamExt;
 use futures::FutureExt;
 use futures::SinkExt;
@@ -332,29 +332,25 @@ const DEFAULT_PIPE_NAME: &str = r"\\.\pipe\HmiRuntime";
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt::init();
-    let app_args = App::new("Open Pipe tool")
+    let app_args = Command::new("Open Pipe tool")
         .version("0.1")
         .about("Test tool for Open Pipe protocol")
-        .arg(Arg::with_name("client").long("client"))
+        .arg(Arg::new("client").long("client"))
         .arg(
-            Arg::with_name("http-port")
+            Arg::new("http-port")
                 .long("http-port")
                 .takes_value(true)
                 .default_value("9229"),
         )
         .arg(
-            Arg::with_name("http-bind")
+            Arg::new("http-bind")
                 .long("http-bind")
                 .takes_value(true)
                 .default_value("127.0.0.1"),
         )
+        .arg(Arg::new("file-root").long("file-root").takes_value(true))
         .arg(
-            Arg::with_name("file-root")
-                .long("file-root")
-                .takes_value(true),
-        )
-        .arg(
-            Arg::with_name("pipe")
+            Arg::new("pipe")
                 .long("pipe")
                 .takes_value(true)
                 .default_value(DEFAULT_PIPE_NAME),

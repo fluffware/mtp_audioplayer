@@ -16,16 +16,9 @@ mod systemd;
 #[cfg(not(feature = "systemd"))]
 mod no_systemd;
 
-pub mod logging {
-    #[cfg(not(feature = "systemd"))]
-    pub use crate::no_systemd::init_logging as init;
-    #[cfg(feature = "systemd")]
-    pub use crate::systemd::init_logging as init;
-}
-
 pub mod daemon {
     #[cfg(not(feature = "systemd"))]
-    pub use crate::no_systemd::{exiting, ready, starting};
+    pub use crate::no_systemd::{add_args, exiting, ready, start};
     #[cfg(feature = "systemd")]
-    pub use crate::systemd::{exiting, ready, starting};
+    pub use crate::systemd::{add_args, exiting, ready, start};
 }

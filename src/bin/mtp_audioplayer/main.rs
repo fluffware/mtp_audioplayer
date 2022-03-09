@@ -1,16 +1,15 @@
-use log::{debug, error, info, warn};
+use clap::{Arg, Command};
+use log::{debug, error, warn};
 use mtp_audioplayer::app_config::{
     self, AlarmContext, StateMachineContext, TagContext, TagSetRequest,
 };
+use mtp_audioplayer::daemon;
 use mtp_audioplayer::open_pipe::alarm_data::AlarmData;
 use mtp_audioplayer::open_pipe::connection as open_pipe;
 use mtp_audioplayer::read_config::{self, PlayerConfig};
 use mtp_audioplayer::util::error::DynResult;
-use mtp_audioplayer::util::error::DynResultFuture;
-use mtp_audioplayer::{daemon, logging};
 use open_pipe::{MessageVariant, WriteTagValue};
 use std::collections::HashMap;
-use std::env;
 use std::ffi::OsStr;
 use std::path::Path;
 use std::sync::Arc;
@@ -126,15 +125,21 @@ type MessageHandler = Box<dyn FnMut(&open_pipe::Message) -> DynResult<bool>>;
 
 #[tokio::main]
 async fn main() {
-    logging::init();
-    daemon::starting();
-    let args = env::args_os();
-    let mut args = args.skip(1);
-    let conf_path_str = if let Some(path) = args.next() {
-        path
-    } else {
-        OsStr::new(DEFAULT_CONFIG_FILE).to_os_string()
-    };
+    let app_args = Command::new("MTP audio player")
+        .version("0.1")
+        .about("Server for audio playback on Siemens Unified Comfort HMI panels")
+        .arg(
+            Arg::new("CONF")
+                .default_value(DEFAULT_CONFIG_FILE)
+                .help("Configuration file"),
+        );
+
+    let app_args = daemon::add_args(app_args);
+    let args = app_args.get_matches();
+
+    let conf_path_str = OsStr::new(args.value_of("CONF").unwrap());
+
+    daemon::start(&args);
 
     let (app_conf, tag_ctxt, alarm_ctxt, state_machine_ctxt, mut pipe_send_rx) =
         match read_configuration(Path::new(&conf_path_str)) {

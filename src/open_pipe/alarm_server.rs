@@ -13,6 +13,7 @@ pub type ReplyFn = Mutex<dyn FnMut(Message) -> Result<()> + Send>;
 struct Subscription {
     system_names: Option<Vec<String>>,
     filter: Option<String>,
+    #[allow(dead_code)]
     language_id: Option<u32>,
     notify: Weak<ReplyFn>,
     cookie: String,

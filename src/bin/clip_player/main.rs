@@ -1,4 +1,4 @@
-use clap::{App, Arg, SubCommand};
+use clap::{Arg, Command};
 use cpal::SampleFormat;
 use log::error;
 use mtp_audioplayer::util::error::DynResult;
@@ -36,54 +36,44 @@ fn adjust_volume(volume: f64, buffer: &mut [i16])
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt::init();
-    let app_args = App::new("Clip player")
+    let app_args = Command::new("Clip player")
         .version("0.1")
         .about("Test tools for clip playback")
         .arg(
-            Arg::with_name("config")
-                .short("c")
+            Arg::new("config")
+                .short('c')
                 .long("config")
                 .value_name("FILE")
                 .help("Load configuration file")
                 .takes_value(true),
         )
         .subcommand(
-            SubCommand::with_name("playfile")
+            Command::new("playfile")
                 .about("Play a sound file")
-                .arg(
-                    Arg::with_name("FILE")
-                        .help("A WAV-file to play")
-                        .required(true),
-                ),
+                .arg(Arg::new("FILE").help("A WAV-file to play").required(true)),
         )
         .subcommand(
-            SubCommand::with_name("playclip")
-                .about("Play a sound clip")
-                .arg(
-                    Arg::with_name("CLIP")
-                        .help("Name of the clip to play")
-                        .required(true)
-                        .multiple(true),
-                ),
+            Command::new("playclip").about("Play a sound clip").arg(
+                Arg::new("CLIP")
+                    .help("Name of the clip to play")
+                    .required(true)
+                    .multiple_values(true),
+            ),
         )
         .subcommand(
-            SubCommand::with_name("action")
-                .about("Run a named action")
-                .arg(
-                    Arg::with_name("ACTION")
-                        .help("Name of the action to run")
-                        .required(true)
-                        .multiple(false),
-                ),
+            Command::new("action").about("Run a named action").arg(
+                Arg::new("ACTION")
+                    .help("Name of the action to run")
+                    .required(true),
+            ),
         )
         .subcommand(
-            SubCommand::with_name("toggle_tag")
+            Command::new("toggle_tag")
                 .about("Run the toggle action for the tag")
                 .arg(
-                    Arg::with_name("TAG")
+                    Arg::new("TAG")
                         .help("Name of the tag to toggle")
-                        .required(true)
-                        .multiple(false),
+                        .required(true),
                 ),
         );
 
@@ -106,14 +96,14 @@ async fn main() {
     };
 
     match args.subcommand() {
-        ("playfile", Some(args)) => {
+        Some(("playfile", args)) => {
             if let Some(file) = args.value_of("FILE") {
                 if let Err(e) = play_file(file).await {
                     error!("{}", e);
                 }
             }
         }
-        ("playclip", Some(args)) => {
+        Some(("playclip", args)) => {
             let app_conf = match app_config {
                 Some(c) => c,
                 None => {

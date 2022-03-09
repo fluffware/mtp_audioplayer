@@ -1,10 +1,12 @@
+use clap::{ArgMatches, Command};
 use log::info;
 
-pub fn init_logging() {
-    tracing_subscriber::fmt::init();
+pub fn add_args<'a>(app_args: Command<'a>) -> Command<'a> {
+    app_args
 }
 
-pub fn starting() {
+pub fn start(_args: &ArgMatches) {
+    tracing_subscriber::fmt::init();
     info!("Server starting");
 }
 
