@@ -1,7 +1,7 @@
 use clap::{Arg, Command};
 use log::{debug, error, warn};
 use mtp_audioplayer::app_config::{
-    self, AlarmContext, StateMachineContext, TagContext, TagSetRequest,
+    self, AlarmContext, StateMachineContext, TagContext, TagSetRequest, VolumeControlContext,
 };
 use mtp_audioplayer::daemon;
 use mtp_audioplayer::open_pipe::alarm_data::AlarmData;
@@ -96,6 +96,7 @@ fn read_configuration(
     PlayerConfig,
     Arc<TagContext>,
     Arc<AlarmContext>,
+    Arc<VolumeControlContext>,
     StateMachineContext,
     UnboundedReceiver<TagSetRequest>,
 )> {
@@ -106,16 +107,23 @@ fn read_configuration(
 
     let (pipe_send_tx, pipe_send_rx) = tokio::sync::mpsc::unbounded_channel::<TagSetRequest>();
     let playback_ctxt = app_config::setup_clip_playback(&app_conf, base_dir)?;
+    let volume_ctxt = Arc::new(app_config::setup_volume_control(&app_conf)?);
     let tag_ctxt = app_config::setup_tags(&app_conf, pipe_send_tx)?;
     let tag_ctxt = Arc::new(tag_ctxt);
     let alarm_ctxt = app_config::setup_alarms(&app_conf, Arc::downgrade(&tag_ctxt))?;
     let alarm_ctxt = Arc::new(alarm_ctxt);
-    let state_machine_ctxt =
-        app_config::setup_state_machines(&app_conf, &playback_ctxt, &tag_ctxt, &alarm_ctxt)?;
+    let state_machine_ctxt = app_config::setup_state_machines(
+        &app_conf,
+        &playback_ctxt,
+        &tag_ctxt,
+        &volume_ctxt,
+        &alarm_ctxt,
+    )?;
     Ok((
         app_conf,
         tag_ctxt,
         alarm_ctxt,
+        volume_ctxt,
         state_machine_ctxt,
         pipe_send_rx,
     ))
@@ -141,7 +149,7 @@ async fn main() {
 
     daemon::start(&args);
 
-    let (app_conf, tag_ctxt, alarm_ctxt, state_machine_ctxt, mut pipe_send_rx) =
+    let (app_conf, tag_ctxt, alarm_ctxt, _volume_ctxt, state_machine_ctxt, mut pipe_send_rx) =
         match read_configuration(Path::new(&conf_path_str)) {
             Ok(ctxt) => ctxt,
             Err(e) => {

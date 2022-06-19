@@ -82,6 +82,12 @@ pub enum ClipType {
 }
 
 #[derive(Debug)]
+pub enum TagOrConst<T> {
+    Tag(String),
+    Const(T),
+}
+
+#[derive(Debug)]
 pub enum ActionType {
     Sequence(Vec<ActionType>),
     Parallel(Vec<ActionType>),
@@ -110,6 +116,11 @@ pub enum ActionType {
         tag_name: String,
         value: String,
     },
+    SetVolume {
+        control: String,
+        value: TagOrConst<f32>,
+    },
+
     IgnoreAlarms {
         filter: String,
         permanent: bool,
@@ -130,6 +141,12 @@ pub struct StateMachineConfig {
     pub id: String,
     pub states: Vec<StateConfig>,
 }
+#[derive(Debug)]
+pub struct VolumeConfig {
+    pub id: String,
+    pub device: String,
+    pub initial_volume: Option<f32>,
+}
 
 #[derive(Debug)]
 pub struct PlayerConfig {
@@ -143,6 +160,7 @@ pub struct PlayerConfig {
     pub tags: Vec<String>,
     pub named_alarm_filters: HashMap<String, AlarmFilterConfig>,
     pub state_machines: Vec<StateMachineConfig>,
+    pub volume_config: Vec<VolumeConfig>,
 }
 
 const NS: &str = "http://www.elektro-kapsel.se/audioplayer/v1";
@@ -294,6 +312,10 @@ fn parse_action(node: &Node) -> DynResult<ActionType> {
         "set_tag" => {
             action = parse_set_tag(node)?;
         }
+        "set_volume" => {
+            action = parse_set_volume(node)?;
+        }
+
         "ignore_alarms" => {
             action = parse_ignore_alarms(node)?;
         }
@@ -462,6 +484,42 @@ fn parse_set_tag(node: &Node) -> DynResult<ActionType> {
     Ok(ActionType::SetTag { tag_name, value })
 }
 
+fn parse_tag_or_const<T>(node: &Node) -> DynResult<TagOrConst<T>>
+where
+    T: FromStr,
+    <T as FromStr>::Err: std::error::Error + Send + Sync + 'static,
+{
+    let mut content = String::new();
+    let mut tag: Option<String> = None;
+    for child in node.children() {
+        if child.is_element() {
+            if check_element_ns(&child)? && child.tag_name().name() == "tag_value" {
+                tag = Some(text_content(&child)?);
+            } else {
+                return Err(ConfigError::new(&child, UnexpectedElement).into());
+            }
+        }
+        if child.is_text() {
+            content.push_str(&child.text().unwrap());
+        }
+    }
+    let content = content.trim();
+    if let Some(tag) = tag {
+        if !content.is_empty() {
+            return Err("set_value tag must be the only content of element".into());
+        }
+        Ok(TagOrConst::Tag(tag))
+    } else {
+        Ok(TagOrConst::Const(content.parse::<T>()?))
+    }
+}
+
+fn parse_set_volume(node: &Node) -> DynResult<ActionType> {
+    let control = required_attribute(node, "control")?;
+    let value = parse_tag_or_const(&node)?;
+    Ok(ActionType::SetVolume { control, value })
+}
+
 fn parse_ignore_alarms(node: &Node) -> DynResult<ActionType> {
     let permanent = optional_attribute(node, "permanent")?.unwrap_or(false);
     let filter = text_content(&node)?;
@@ -603,6 +661,19 @@ fn parse_playback_device(node: &Node, player: &mut PlayerConfig) -> DynResult<()
     Ok(())
 }
 
+fn parse_volume_control(node: &Node, controls: &mut Vec<VolumeConfig>) -> DynResult<()> {
+    let id = required_attribute(&node, "id")?;
+    let device = text_content(&node)?;
+    let initial_volume = optional_attribute::<f32>(&node, "initial")?;
+    let control = VolumeConfig {
+        id,
+        device,
+        initial_volume,
+    };
+    controls.push(control);
+    Ok(())
+}
+
 fn check_element_ns(node: &Node) -> Result<bool, ConfigError> {
     if node.is_element() {
         if node.tag_name().namespace() != Some(NS) {
@@ -633,6 +704,7 @@ pub fn read_str(input: &str) -> DynResult<PlayerConfig> {
         tags: Vec::new(),
         named_alarm_filters: HashMap::new(),
         state_machines: Vec::new(),
+        volume_config: Vec::new(),
     };
 
     let root = document.root_element();
@@ -662,7 +734,9 @@ pub fn read_str(input: &str) -> DynResult<PlayerConfig> {
                 "state_machine" => {
                     player.state_machines.push(parse_state_machine(&node)?);
                 }
-
+                "volume_control" => {
+                    parse_volume_control(&node, &mut player.volume_config)?;
+                }
                 _ => return Err(ConfigError::new(&node, UnexpectedElement).into()),
             }
         }

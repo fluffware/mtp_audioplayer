@@ -9,6 +9,7 @@ pub mod play;
 pub mod repeat;
 pub mod sequence;
 pub mod set_tag;
+pub mod set_volume;
 pub mod tag_dispatcher;
 pub mod tag_setter;
 pub mod wait;

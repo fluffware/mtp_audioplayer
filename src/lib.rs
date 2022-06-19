@@ -22,3 +22,15 @@ pub mod daemon {
     #[cfg(feature = "systemd")]
     pub use crate::systemd::{add_args, exiting, ready, start};
 }
+
+#[cfg(feature = "alsa")]
+mod alsa;
+#[cfg(not(feature = "alsa"))]
+mod volume_dummy;
+
+pub mod volume_control {
+    #[cfg(feature = "alsa")]
+    pub use crate::alsa::volume_alsa::VolumeControl;
+    #[cfg(not(feature = "alsa"))]
+    pub use crate::volume_dummy::VolumeControl;
+}

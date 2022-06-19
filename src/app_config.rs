@@ -11,6 +11,7 @@ use crate::actions::{
     repeat::RepeatAction,
     sequence::SequenceAction,
     set_tag::SetTagAction,
+    set_volume::SetVolumeAction,
     tag_dispatcher::{self, TagDispatched, TagDispatcher},
     tag_setter::{TagSetFuture, TagSetter},
     wait::WaitAction,
@@ -22,9 +23,11 @@ use crate::clip_queue::ClipQueue;
 use crate::open_pipe::alarm_data::AlarmData;
 use crate::open_pipe::alarm_data::AlarmId;
 use crate::read_config::ActionType;
+use crate::read_config::TagOrConst;
 use crate::sample_buffer::{Sample as BufferSample, SampleBuffer};
 use crate::state_machine::StateMachine;
 use crate::util::error::DynResult;
+use crate::volume_control::VolumeControl;
 use crate::{
     clip_player::ClipPlayer,
     read_config::{ClipType, PlayerConfig},
@@ -292,6 +295,7 @@ pub struct ActionContext {
 struct ActionBuildData<'a> {
     playback_ctxt: &'a PlaybackContext,
     tag_ctxt: &'a Arc<TagContext>,
+    volume_control: &'a Arc<VolumeControlContext>,
     alarm_ctxt: &'a Arc<AlarmContext>,
     state_machine_map: &'a HashMap<String, Arc<StateMachine>>,
     current_state_machine: &'a Arc<StateMachine>,
@@ -402,6 +406,23 @@ fn action_conf_to_action(
         ))),
 
         ActionType::Debug(text) => Ok(Arc::new(DebugAction::new(text.clone()))),
+        ActionType::SetVolume { control, value } => {
+            let ctrl = match build_data.volume_control.controls.get(control) {
+                Some(ctrl) => ctrl,
+                None => return Err(format!("No volume control named '{}' found.", control).into()),
+            };
+            match value {
+                TagOrConst::Tag(tag_name) => Ok(Arc::new(SetVolumeAction::new_tag(
+                    ctrl.clone(),
+                    tag_name.to_string(),
+                    build_data.tag_ctxt.clone(),
+                ))),
+                TagOrConst::Const(level) => Ok(Arc::new(SetVolumeAction::<TagContext>::new_const(
+                    ctrl.clone(),
+                    *level,
+                ))),
+            }
+        }
     }
 }
 
@@ -690,10 +711,31 @@ impl StateMachineContext {
         Ok(())
     }
 }
+pub struct VolumeControlContext {
+    controls: HashMap<String, Arc<Mutex<VolumeControl>>>,
+}
+
+pub fn setup_volume_control(player_conf: &PlayerConfig) -> DynResult<VolumeControlContext> {
+    let mut ctxt = VolumeControlContext {
+        controls: HashMap::new(),
+    };
+
+    for conf in &player_conf.volume_config {
+        let control = VolumeControl::new(&conf.device)?;
+        if let Some(volume) = conf.initial_volume {
+            control.set_volume(volume)?;
+        }
+        ctxt.controls
+            .insert(conf.id.clone(), Arc::new(Mutex::new(control)));
+    }
+    Ok(ctxt)
+}
+
 pub fn setup_state_machines(
     player_conf: &PlayerConfig,
     playback_ctxt: &PlaybackContext,
     tag_ctxt: &Arc<TagContext>,
+    volume_control: &Arc<VolumeControlContext>,
     alarm_ctxt: &Arc<AlarmContext>,
 ) -> DynResult<StateMachineContext> {
     let mut state_machines = Vec::new();
@@ -715,6 +757,7 @@ pub fn setup_state_machines(
             let build_data = ActionBuildData {
                 playback_ctxt,
                 tag_ctxt,
+                volume_control,
                 alarm_ctxt,
                 state_machine_map: &state_machine_map,
                 current_state_machine: state_machine,

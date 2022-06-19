@@ -2,6 +2,7 @@
 <audioplayer xmlns="http://www.elektro-kapsel.se/audioplayer/v1">
   <bind>/tmp/siemens/automation/HmiRunTime</bind>
   <playback_device rate="48000" channels="2">default</playback_device>
+  <volume_control id="main" initial="1.0">default</volume_control>
   <clips path="DTMF"> 
     <file id="SoundAlarm">0.wav</file>
     <file id="SoundInfo">1.wav</file>
@@ -32,6 +33,8 @@
     <tag>Tag1</tag>
     <tag>OnOff</tag>
     <tag>IgnoreAlarms</tag>
+    <tag>Volume</tag>
+    <tag>VolumeHalf</tag>
     <!--
 	<toggle tag="AlarmRestart">
 	<alarm_restart/>
@@ -70,6 +73,18 @@
 	<debug>Tag1=0</debug>
 	<wait_tag lt="0">Tag1</wait_tag>
 	<debug>Tag1&lt;0</debug>
+      </repeat>
+    </state>
+  </state_machine>
+  <state_machine id = "volume">
+    <state id="change_volume">
+      <repeat>
+	<wait_tag changed="1">Volume</wait_tag>
+	<set_volume control="main"><tag_value>Volume</tag_value></set_volume>
+      </repeat>
+      <repeat>
+	<wait_tag changed="1">VolumeHalf</wait_tag>
+	<set_volume control="main">0.5</set_volume>
       </repeat>
     </state>
   </state_machine>
