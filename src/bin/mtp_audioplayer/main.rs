@@ -1,5 +1,6 @@
 use clap::{Arg, Command};
 use log::{debug, error, warn};
+use mtp_audioplayer::actions::tag_setter::TagSetter;
 use mtp_audioplayer::app_config::{
     self, AlarmContext, StateMachineContext, TagContext, TagSetRequest, VolumeControlContext,
 };
@@ -16,6 +17,7 @@ use std::sync::Arc;
 use tokio::signal;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::time::{timeout, Duration};
+use git_version::git_version;
 
 const DEFAULT_CONFIG_FILE: &str = "mtp_audioplayer.xml";
 
@@ -133,8 +135,9 @@ type MessageHandler = Box<dyn FnMut(&open_pipe::Message) -> DynResult<bool>>;
 
 #[tokio::main]
 async fn main() {
+    let version = env!("CARGO_PKG_VERSION").to_string()+" "+ git_version!();
     let app_args = Command::new("MTP audio player")
-        .version("0.1")
+        .version(version.as_str())
         .about("Server for audio playback on Siemens Unified Comfort HMI panels")
         .arg(
             Arg::new("CONF")
@@ -161,7 +164,7 @@ async fn main() {
                 return;
             }
         };
-
+    tag_ctxt.add_tag("AUDIO_SERVER_VERSION", None);
     let mut pipe = match open_pipe::Connection::connect(&app_conf.bind).await {
         Err(err) => {
             error!("Failed open connection to {}: {}", app_conf.bind, err);
@@ -204,6 +207,7 @@ async fn main() {
             }
         }
     }
+
     let mut handler_list = Vec::<MessageHandler>::new();
 
     // Handle NotifySubscribeTag message
@@ -229,7 +233,7 @@ async fn main() {
         }
         Ok(true)
     }));
-
+    tag_ctxt.set_tag("AUDIO_SERVER_VERSION", version.as_str());
     daemon::ready();
     let mut done = false;
     while !done {

@@ -466,6 +466,17 @@ impl TagContext {
         let tags = self.tags.lock().unwrap();
         tags.keys().cloned().collect()
     }
+
+    pub fn add_tag(&self, name: &str, state: Option<String>) {
+        let mut tags = self.tags.lock().unwrap();
+        tags.insert(
+            name.to_string(),
+            TagObservable {
+                state,
+                observers: watch::channel("".to_string()),
+            },
+        );
+    }
 }
 
 impl TagSetter for TagContext {
@@ -521,15 +532,8 @@ pub fn setup_tags(
 ) -> DynResult<TagContext> {
     let tag_ctxt = TagContext::new(tag_send_tx);
     {
-        let mut tags = tag_ctxt.tags.lock().unwrap();
         for name in &player_conf.tags {
-            tags.insert(
-                name.to_string(),
-                TagObservable {
-                    state: None,
-                    observers: watch::channel("".to_string()),
-                },
-            );
+            tag_ctxt.add_tag(name, None);
         }
     }
     Ok(tag_ctxt)
