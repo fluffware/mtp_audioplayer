@@ -1,5 +1,5 @@
 use crate::util::error::DynResult;
-use log::{debug, error};
+use log::{error};
 use std::future::Future;
 use std::io;
 use tokio::io::Interest;
@@ -118,7 +118,7 @@ rw_pipe_def! {rw_pipe_client, NamedPipeClient}
 rw_pipe_def! {rw_pipe_server, NamedPipeServer}
 
 impl ConnectionWindows {
-    pub async fn server<H, F, S>(path: &str, handler: H, shutdown: S) -> DynResult<()>
+    pub async fn server<H, F, S>(path: &str, handler: H, _shutdown: S) -> DynResult<()>
     where
         H: Fn(ConnectionWindows) -> F,
         F: Future<Output = ()> + Send + 'static,
@@ -145,13 +145,13 @@ impl ConnectionWindows {
             };
             tokio::spawn(handler(conn));
         }
-        Ok(())
+        //Ok(())
     }
 
     pub async fn client(path: &str) -> DynResult<ConnectionWindows> {
         let mut retries = 5;
         let client = loop {
-            let client = match ClientOptions::new().open(path) {
+            match ClientOptions::new().open(path) {
                 Ok(client) => break client,
                 Err(e) if e.raw_os_error() == Some(winerror::ERROR_PIPE_BUSY as i32) => {
                     // Try again
