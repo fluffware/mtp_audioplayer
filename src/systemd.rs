@@ -1,5 +1,5 @@
 use clap::{Arg, ArgMatches, Command};
-use log::{info, warn};
+use log::{info, warn, LevelFilter};
 use std::sync::atomic::{AtomicBool, Ordering};
 use systemd::daemon::notify;
 use systemd::daemon::{STATE_READY, STATE_STOPPING};
@@ -21,6 +21,7 @@ pub fn start(args: &ArgMatches) {
         if let Err(e) = JournalLog::init() {
             eprintln!("Failed to start logging: {}", e);
         }
+        log::set_max_level(LevelFilter::Info);
         info!("Server starting");
     } else {
         tracing_subscriber::fmt::init();
