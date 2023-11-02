@@ -55,7 +55,7 @@ where
         let control = self.control.clone();
         match &self.value {
             TagOrConst::Const(volume) => {
-                let volume = volume.clone();
+                let volume = *volume;
                 Box::pin(async move {
                     let control = control.lock().unwrap();
                     control.set_volume(volume)?;

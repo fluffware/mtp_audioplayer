@@ -96,12 +96,10 @@ impl FromStr for AlarmState {
             | [RAISED_CLEARED_ACKNOWLEDGED_LC] => Ok(RaisedClearedAcknowledged),
 
             [REMOVED_LC] => Ok(AlarmState::Removed),
-            _ => {
-                return Err(AlarmStateError(format!(
-                    "String \"{}\" is not a valid alarm state",
-                    s
-                )))
-            }
+            _ => Err(AlarmStateError(format!(
+                "String \"{}\" is not a valid alarm state",
+                s
+            ))),
         }
     }
 }
@@ -136,8 +134,8 @@ impl StringCriterion {
 
     pub fn as_str<'a>(&self) -> &'a str {
         match self {
-            StringCriterion::AlarmClassName => &"AlarmClassName",
-            StringCriterion::AlarmName => &"Name",
+            StringCriterion::AlarmClassName => "AlarmClassName",
+            StringCriterion::AlarmName => "Name",
         }
     }
 }
@@ -162,10 +160,10 @@ impl IntCriterion {
 
     pub fn as_str<'a>(&self) -> &'a str {
         match self {
-            IntCriterion::Id => &"ID",
-            IntCriterion::InstanceId => &"InstanceID",
-            IntCriterion::Priority => &"Priority",
-            IntCriterion::AlarmState => &"State",
+            IntCriterion::Id => "ID",
+            IntCriterion::InstanceId => "InstanceID",
+            IntCriterion::Priority => "Priority",
+            IntCriterion::AlarmState => "State",
         }
     }
 }
@@ -210,9 +208,9 @@ impl ToString for BoolOp {
                 "(".to_owned() + &arg1.to_string() + ") OR (" + &arg2.to_string() + ")"
             }
 
-            StringEqual(criterion, value) => criterion.as_str().to_owned() + " = '" + &value + "'",
+            StringEqual(criterion, value) => criterion.as_str().to_owned() + " = '" + value + "'",
             StateEqual(criterion, state) => {
-                criterion.as_str().to_owned() + " = '" + &state.as_str() + "'"
+                criterion.as_str().to_owned() + " = '" + state.as_str() + "'"
             }
             IntEqual(criterion, value) => {
                 criterion.as_str().to_owned() + " = " + &value.to_string()
@@ -510,7 +508,7 @@ fn parse_and(input: &str) -> IResult<&str, BoolOp, FilterError> {
     ))
 }
 
-pub fn parse_filter<'a>(input: &'a str) -> Result<BoolOp, FilterError<'a>> {
+pub fn parse_filter(input: &str) -> Result<BoolOp, FilterError> {
     match terminated(parse_or, eof)(input) {
         Ok((_, op)) => Ok(op),
         Err(nom::Err::Error(e)) | Err(nom::Err::Failure(e)) => Err(e),

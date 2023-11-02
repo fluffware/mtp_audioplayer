@@ -97,7 +97,7 @@ fn load_clip(
     channels: usize,
     amplitude: f32,
 ) -> DynResult<Arc<SampleBuffer>> {
-    let mut reader = hound::WavReader::open(&os_file)
+    let mut reader = hound::WavReader::open(os_file)
         .map_err::<Box<dyn std::error::Error + Send + Sync>, _>(|err| {
             format!(
                 "Failed to open audio file \"{}\": {}",
@@ -108,38 +108,31 @@ fn load_clip(
         })?;
     let spec = reader.spec();
 
-    let samples;
-    match sample_format {
-        SampleFormat::I16 => {
-            samples = SampleBuffer::I16(convert_samples(
-                &mut reader,
-                os_file,
-                spec.sample_rate,
-                sample_rate,
-                channels,
-                amplitude,
-            )?);
-        }
-        SampleFormat::U16 => {
-            samples = SampleBuffer::U16(convert_samples(
-                &mut reader,
-                os_file,
-                spec.sample_rate,
-                sample_rate,
-                channels,
-                amplitude,
-            )?);
-        }
-        SampleFormat::F32 => {
-            samples = SampleBuffer::F32(convert_samples(
-                &mut reader,
-                os_file,
-                spec.sample_rate,
-                sample_rate,
-                channels,
-                amplitude,
-            )?);
-        }
+    let samples = match sample_format {
+        SampleFormat::I16 => SampleBuffer::I16(convert_samples(
+            &mut reader,
+            os_file,
+            spec.sample_rate,
+            sample_rate,
+            channels,
+            amplitude,
+        )?),
+        SampleFormat::U16 => SampleBuffer::U16(convert_samples(
+            &mut reader,
+            os_file,
+            spec.sample_rate,
+            sample_rate,
+            channels,
+            amplitude,
+        )?),
+        SampleFormat::F32 => SampleBuffer::F32(convert_samples(
+            &mut reader,
+            os_file,
+            spec.sample_rate,
+            sample_rate,
+            channels,
+            amplitude,
+        )?),
     };
 
     Ok(Arc::new(samples))
@@ -348,7 +341,7 @@ fn action_conf_to_action(
         ActionType::Goto(state_name) => {
             let state_machine;
             let state_name_ref;
-            if let Some((machine, name)) = state_name.split_once(":") {
+            if let Some((machine, name)) = state_name.split_once(':') {
                 state_machine = match build_data.state_machine_map.get(machine) {
                     Some(s) => s,
                     None => return Err(format!("No state machine named '{}'", machine).into()),
@@ -488,7 +481,7 @@ impl TagSetter for TagContext {
             value: value.to_string(),
             done: done_send,
         };
-        if let Err(_) = self.tag_send_tx.send(req) {
+        if self.tag_send_tx.send(req).is_err() {
             return Box::pin(std::future::ready(Err("Failed to queue request".into())));
         }
         Box::pin(async move { timeout(Duration::from_millis(500), done_recv).await?? })
@@ -506,7 +499,7 @@ impl TagDispatcher for TagContext {
             .map_err(|_| tag_dispatcher::Error::DispatcherNotAvailable)?;
         let data = tags
             .get_mut(tag)
-            .ok_or_else(|| tag_dispatcher::Error::TagNotFound)?;
+            .ok_or(tag_dispatcher::Error::TagNotFound)?;
         let value = data.state.clone();
         let mut rx = data.observers.1.clone();
         let wait_tag = Box::pin(async move {
@@ -579,10 +572,10 @@ impl AlarmFilterState {
             if let Some(tag_matching) = &self.tag_matching {
                 tag_setter
                     .as_ref()
-                    .set_tag(&tag_matching, &matching.to_string());
+                    .set_tag(tag_matching, &matching.to_string());
             }
             if let Some(tag_ignored) = &self.tag_ignored {
-                tag_setter.set_tag(&tag_ignored, &ignored.to_string());
+                tag_setter.set_tag(tag_ignored, &ignored.to_string());
             }
         }
     }
@@ -624,7 +617,7 @@ impl AlarmDispatcher for AlarmContext {
             .map_err(|_| alarm_dispatcher::Error::DispatcherNotAvailable)?;
         let filter = filters
             .get_mut(filter_name)
-            .ok_or_else(|| alarm_dispatcher::Error::AlarmFilterNotFound)?;
+            .ok_or(alarm_dispatcher::Error::AlarmFilterNotFound)?;
         let count = filter.matching_count();
         let mut rx = filter.observers.1.clone();
         let wait_alarm = Box::pin(async move {
@@ -644,7 +637,7 @@ impl AlarmDispatcher for AlarmContext {
             .map_err(|_| alarm_dispatcher::Error::DispatcherNotAvailable)?;
         let filter = filters
             .get_mut(filter_name)
-            .ok_or_else(|| alarm_dispatcher::Error::AlarmFilterNotFound)?;
+            .ok_or(alarm_dispatcher::Error::AlarmFilterNotFound)?;
         Ok(filter.matching_count() as u32)
     }
 }
@@ -652,7 +645,7 @@ impl AlarmDispatcher for AlarmContext {
 impl AlarmFunctions for AlarmContext {
     fn ignore_matched_alarms(&self, filter: &str, permanent: bool) {
         if let Ok(mut filters) = self.alarm_filters.lock() {
-            if let Some(mut filter) = filters.get_mut(filter) {
+            if let Some(filter) = filters.get_mut(filter) {
                 filter.ignore = filter.matching.clone();
                 filter.ignore_permanent = permanent;
                 filter.update_alarm_counts();
@@ -662,7 +655,7 @@ impl AlarmFunctions for AlarmContext {
 
     fn restore_ignored_alarms(&self, filter: &str) {
         if let Ok(mut filters) = self.alarm_filters.lock() {
-            if let Some(mut filter) = filters.get_mut(filter) {
+            if let Some(filter) = filters.get_mut(filter) {
                 filter.ignore = HashSet::new();
                 filter.update_alarm_counts();
             }

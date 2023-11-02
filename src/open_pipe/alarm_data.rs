@@ -84,14 +84,19 @@ impl From<&AlarmData> for NotifyAlarm {
 }
 
 /// Contains the parts from AlarmData that uniquely identifies an alarm
-#[derive(PartialEq, Eq, Hash, Ord, Clone)]
+#[derive(PartialEq, Eq, Hash, Clone)]
 pub struct AlarmId {
     pub id: i32,
 }
 
 impl PartialOrd for AlarmId {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.id.partial_cmp(&other.id)
+        Some(self.cmp(other))
+    }
+}
+impl Ord for AlarmId {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.id.cmp(&other.id)
     }
 }
 

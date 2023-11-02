@@ -193,12 +193,12 @@ fn generate_samples<S>(
                 //debug!("{} @ {}", *seqno, pos);
                 if samples.len() - *pos >= buffer.len() {
                     let end = *pos + buffer.len();
-                    buffer.copy_from_slice(&samples.as_ref()[*pos..end]);
+                    buffer.copy_from_slice(&samples[*pos..end]);
                     *pos = end;
                 } else {
                     let end = samples.len();
                     let copy_len = end - *pos;
-                    buffer[0..copy_len].copy_from_slice(&samples.as_ref()[*pos..end]);
+                    buffer[0..copy_len].copy_from_slice(&samples[*pos..end]);
                     for s in buffer[copy_len..].iter_mut() {
                         *s = S::SAMPLE_OFFSET;
                     }
@@ -280,9 +280,8 @@ fn playback_thread(
     let mut guard = ctrl.get_state_guard();
     ctrl.change_state(&mut guard, PlaybackState::Ready);
     loop {
-        match &*guard {
-            PlaybackState::Shutdown => break,
-            _ => {}
+        if let PlaybackState::Shutdown = &*guard {
+            break;
         }
         guard = ctrl
             .cond
@@ -384,12 +383,11 @@ impl ClipPlayer {
                 conf.sample_format()
             );*/
             if let Some(prev) = &best_fit {
-                if conf.channels() == channels && prev.channels() != channels {
-                    best_fit = Some(conf);
-                } else if supports_samplerate(&conf, rate) && !supports_samplerate(prev, rate) {
-                    best_fit = Some(conf);
-                } else if conf.sample_format() == sample_format
-                    && prev.sample_format() != sample_format
+                // Check if this conf matches better than the previous best conf
+                if (conf.channels() == channels && prev.channels() != channels)
+                    || (supports_samplerate(&conf, rate) && !supports_samplerate(prev, rate))
+                    || (conf.sample_format() == sample_format
+                        && prev.sample_format() != sample_format)
                 {
                     best_fit = Some(conf);
                 }

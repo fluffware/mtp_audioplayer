@@ -39,7 +39,7 @@ impl TagServer {
     fn build_notify_tags(tag_map: &HashMap<String, TagData>, tags: &[String]) -> NotifyTags {
         let mut tag_notifications = Vec::new();
         if tags.is_empty() {
-            for (_, tag_data) in tag_map {
+            for tag_data in tag_map.values() {
                 tag_notifications.push(NotifyTag {
                     data: (*tag_data).clone(),
                     time_stamp: Utc::now().to_rfc3339(),
@@ -164,22 +164,23 @@ impl TagServer {
                     }
                 }
             }
-            if found {
-                if match exclude_cookie {
+            if found
+                && match exclude_cookie {
                     Some(cookie) => cookie != subscr.cookie,
                     None => true,
-                } {
-                    let msg = Message {
-                        message: MessageVariant::NotifySubscribeTag(
-                            Self::build_notify_tags(tag_map, &subscr.tags).into(),
-                        ),
-                        client_cookie: subscr.cookie.clone(),
-                    };
-                    let mut send = notify_fn.lock().unwrap();
-                    let _ = send(msg);
-                    debug!("Notifying subscription {}", subscr_name);
                 }
+            {
+                let msg = Message {
+                    message: MessageVariant::NotifySubscribeTag(
+                        Self::build_notify_tags(tag_map, &subscr.tags).into(),
+                    ),
+                    client_cookie: subscr.cookie.clone(),
+                };
+                let mut send = notify_fn.lock().unwrap();
+                let _ = send(msg);
+                debug!("Notifying subscription {}", subscr_name);
             }
+
             true // Keep subscription
         });
     }

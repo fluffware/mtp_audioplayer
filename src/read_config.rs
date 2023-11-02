@@ -172,9 +172,9 @@ where
 {
     let attr_str = node
         .attribute(name)
-        .ok_or_else(|| ConfigError::new(&node, MissingAttribute(name.to_string())))?;
+        .ok_or_else(|| ConfigError::new(node, MissingAttribute(name.to_string())))?;
     let res: Result<T, <T as FromStr>::Err> = attr_str.parse();
-    res.map_err(|e| ConfigError::new(&node, ParseAttribute(name.to_string(), e.into())))
+    res.map_err(|e| ConfigError::new(node, ParseAttribute(name.to_string(), e.into())))
 }
 
 fn optional_attribute<T>(node: &Node, name: &str) -> Result<Option<T>, ConfigError>
@@ -190,7 +190,7 @@ where
     match res {
         Ok(res) => Ok(Some(res)),
         Err(e) => Err(ConfigError::new(
-            &node,
+            node,
             ParseAttribute(name.to_string(), e.into()),
         )),
     }
@@ -205,7 +205,7 @@ fn text_content(node: &Node) -> Result<String, ConfigError> {
             return Err(ConfigError::new(&child, UnexpectedElement));
         }
         if child.is_text() {
-            content.push_str(&child.text().unwrap());
+            content.push_str(child.text().unwrap());
         }
     }
     Ok(content)
@@ -232,9 +232,9 @@ fn parse_bind(node: &Node) -> Result<String, ConfigError> {
 }
 
 fn parse_file_clip(node: &Node) -> Result<(String, ClipType), ConfigError> {
-    let id: String = required_attribute(&node, "id")?;
-    let amplitude = optional_attribute(&node, "amplitude")?.unwrap_or(1.0);
-    let file_name = text_content(&node)?;
+    let id: String = required_attribute(node, "id")?;
+    let amplitude = optional_attribute(node, "amplitude")?.unwrap_or(1.0);
+    let file_name = text_content(node)?;
     Ok((
         id,
         ClipType::File {
@@ -245,12 +245,12 @@ fn parse_file_clip(node: &Node) -> Result<(String, ClipType), ConfigError> {
 }
 
 fn parse_sine_clip(node: &Node) -> DynResult<(String, ClipType)> {
-    let id = required_attribute(&node, "id")?;
-    let amplitude = required_attribute(&node, "amplitude")?;
-    let frequency = required_attribute(&node, "frequency")?;
-    let dur_str: String = required_attribute(&node, "duration")?;
+    let id = required_attribute(node, "id")?;
+    let amplitude = required_attribute(node, "amplitude")?;
+    let frequency = required_attribute(node, "frequency")?;
+    let dur_str: String = required_attribute(node, "duration")?;
     let duration = parse_duration(&dur_str)
-        .map_err(|e| ConfigError::new(&node, ParseAttribute("duration".to_string(), e.into())))?;
+        .map_err(|e| ConfigError::new(node, ParseAttribute("duration".to_string(), e)))?;
     Ok((
         id,
         ClipType::Sine {
@@ -282,60 +282,33 @@ fn parse_clips(parent: &Node) -> DynResult<HashMap<String, ClipType>> {
 }
 
 fn parse_action(node: &Node) -> DynResult<ActionType> {
-    let action;
-    match node.tag_name().name() {
-        "sequence" => {
-            action = parse_sequence(node)?;
-        }
-        "parallel" => {
-            action = parse_parallel(node)?;
-        }
-        "play" => {
-            action = parse_play(node)?;
-        }
-        "wait" => {
-            action = parse_wait(node)?;
-        }
-        "wait_tag" => {
-            action = parse_wait_tag(node)?;
-        }
-        "wait_alarm" => {
-            action = parse_wait_alarm(node)?;
-        }
+    let action = match node.tag_name().name() {
+        "sequence" => parse_sequence(node)?,
+        "parallel" => parse_parallel(node)?,
+        "play" => parse_play(node)?,
+        "wait" => parse_wait(node)?,
+        "wait_tag" => parse_wait_tag(node)?,
+        "wait_alarm" => parse_wait_alarm(node)?,
 
-        "goto" => {
-            action = parse_goto(node)?;
-        }
-        "repeat" => {
-            action = parse_repeat(node)?;
-        }
-        "set_tag" => {
-            action = parse_set_tag(node)?;
-        }
-        "set_volume" => {
-            action = parse_set_volume(node)?;
-        }
+        "goto" => parse_goto(node)?,
+        "repeat" => parse_repeat(node)?,
+        "set_tag" => parse_set_tag(node)?,
+        "set_volume" => parse_set_volume(node)?,
 
-        "ignore_alarms" => {
-            action = parse_ignore_alarms(node)?;
-        }
-        "restore_alarms" => {
-            action = parse_restore_alarms(node)?;
-        }
-        "debug" => {
-            action = parse_debug(node)?;
-        }
-        _ => return Err(ConfigError::new(&node, UnexpectedElement).into()),
-    }
+        "ignore_alarms" => parse_ignore_alarms(node)?,
+        "restore_alarms" => parse_restore_alarms(node)?,
+        "debug" => parse_debug(node)?,
+        _ => return Err(ConfigError::new(node, UnexpectedElement).into()),
+    };
     Ok(action)
 }
 
 fn parse_play(node: &Node) -> DynResult<ActionType> {
-    let priority = optional_attribute(&node, "priority")?.unwrap_or(0);
+    let priority = optional_attribute(node, "priority")?.unwrap_or(0);
 
-    let timeout_str: Option<String> = optional_attribute(&node, "timeout")?;
+    let timeout_str: Option<String> = optional_attribute(node, "timeout")?;
     let timeout = timeout_str.map_or(Ok(None), |s| Some(parse_duration(&s)).transpose())?;
-    let sound = text_content(&node)?;
+    let sound = text_content(node)?;
     Ok(ActionType::Play {
         priority,
         timeout,
@@ -344,7 +317,7 @@ fn parse_play(node: &Node) -> DynResult<ActionType> {
 }
 
 fn parse_wait(node: &Node) -> DynResult<ActionType> {
-    let time_str = text_content(&node)?;
+    let time_str = text_content(node)?;
 
     Ok(ActionType::Wait(parse_duration(&time_str)?))
 }
@@ -364,28 +337,28 @@ fn set_tag_condition(
 
 fn parse_wait_tag(node: &Node) -> DynResult<ActionType> {
     let mut condition = None;
-    if let Some(v) = optional_attribute::<f64>(&node, "eq")? {
+    if let Some(v) = optional_attribute::<f64>(node, "eq")? {
         set_tag_condition(node, &mut condition, TagCondition::EqualNumber(v))?;
     }
-    if let Some(v) = optional_attribute::<f64>(&node, "ne")? {
+    if let Some(v) = optional_attribute::<f64>(node, "ne")? {
         set_tag_condition(node, &mut condition, TagCondition::NotEqualNumber(v))?;
     }
-    if let Some(v) = optional_attribute::<f64>(&node, "lt")? {
+    if let Some(v) = optional_attribute::<f64>(node, "lt")? {
         set_tag_condition(node, &mut condition, TagCondition::Less(v))?;
     }
-    if let Some(v) = optional_attribute::<f64>(&node, "le")? {
+    if let Some(v) = optional_attribute::<f64>(node, "le")? {
         set_tag_condition(node, &mut condition, TagCondition::LessEqual(v))?;
     }
-    if let Some(v) = optional_attribute::<f64>(&node, "gt")? {
+    if let Some(v) = optional_attribute::<f64>(node, "gt")? {
         set_tag_condition(node, &mut condition, TagCondition::Greater(v))?;
     }
-    if let Some(v) = optional_attribute::<f64>(&node, "ge")? {
+    if let Some(v) = optional_attribute::<f64>(node, "ge")? {
         set_tag_condition(node, &mut condition, TagCondition::GreaterEqual(v))?;
     }
-    if let Some(v) = optional_attribute::<String>(&node, "eq_str")? {
+    if let Some(v) = optional_attribute::<String>(node, "eq_str")? {
         set_tag_condition(node, &mut condition, TagCondition::EqualString(v))?;
     }
-    if let Some(_) = optional_attribute::<String>(&node, "changed")? {
+    if let Some(_v) = optional_attribute::<String>(node, "changed")? {
         set_tag_condition(node, &mut condition, TagCondition::Changed)?;
     }
 
@@ -396,7 +369,7 @@ fn parse_wait_tag(node: &Node) -> DynResult<ActionType> {
         }
     };
 
-    let tag_name = text_content(&node)?;
+    let tag_name = text_content(node)?;
 
     Ok(ActionType::WaitTag {
         tag_name,
@@ -405,8 +378,8 @@ fn parse_wait_tag(node: &Node) -> DynResult<ActionType> {
 }
 
 fn parse_wait_alarm(node: &Node) -> DynResult<ActionType> {
-    let filter_name = text_content(&node)?;
-    let count = required_attribute::<String>(&node, "count")?;
+    let filter_name = text_content(node)?;
+    let count = required_attribute::<String>(node, "count")?;
     let condition = match count.as_str() {
         "none" => AlarmCondition::None,
         "any" => AlarmCondition::Any,
@@ -414,7 +387,7 @@ fn parse_wait_alarm(node: &Node) -> DynResult<ActionType> {
         "dec" => AlarmCondition::Dec,
         _ => {
             return Err(ConfigError::new(
-                &node,
+                node,
                 ParseAttribute(
                     "count".to_string(),
                     "Must be one of 'none', 'any', 'inc' or 'dec'".into(),
@@ -430,13 +403,13 @@ fn parse_wait_alarm(node: &Node) -> DynResult<ActionType> {
 }
 
 fn parse_goto(node: &Node) -> DynResult<ActionType> {
-    let state_name = text_content(&node)?;
+    let state_name = text_content(node)?;
     Ok(ActionType::Goto(state_name))
 }
 
 fn parse_repeat(node: &Node) -> DynResult<ActionType> {
-    let count = optional_attribute(&node, "count")?;
-    let action = parse_sequence(&node)?;
+    let count = optional_attribute(node, "count")?;
+    let action = parse_sequence(node)?;
     Ok(ActionType::Repeat {
         count,
         action: Box::new(action),
@@ -480,7 +453,7 @@ fn parse_parallel(parent: &Node) -> DynResult<ActionType> {
 }
 fn parse_set_tag(node: &Node) -> DynResult<ActionType> {
     let tag_name = required_attribute(node, "tag")?;
-    let value = text_content(&node)?;
+    let value = text_content(node)?;
     Ok(ActionType::SetTag { tag_name, value })
 }
 
@@ -500,7 +473,7 @@ where
             }
         }
         if child.is_text() {
-            content.push_str(&child.text().unwrap());
+            content.push_str(child.text().unwrap());
         }
     }
     let content = content.trim();
@@ -516,28 +489,28 @@ where
 
 fn parse_set_volume(node: &Node) -> DynResult<ActionType> {
     let control = required_attribute(node, "control")?;
-    let value = parse_tag_or_const(&node)?;
+    let value = parse_tag_or_const(node)?;
     Ok(ActionType::SetVolume { control, value })
 }
 
 fn parse_ignore_alarms(node: &Node) -> DynResult<ActionType> {
     let permanent = optional_attribute(node, "permanent")?.unwrap_or(false);
-    let filter = text_content(&node)?;
+    let filter = text_content(node)?;
     Ok(ActionType::IgnoreAlarms { filter, permanent })
 }
 
 fn parse_restore_alarms(node: &Node) -> DynResult<ActionType> {
-    let filter = text_content(&node)?;
+    let filter = text_content(node)?;
     Ok(ActionType::RestoreAlarms { filter })
 }
 
 fn parse_debug(node: &Node) -> DynResult<ActionType> {
-    let text = text_content(&node)?;
+    let text = text_content(node)?;
     Ok(ActionType::Debug(text))
 }
 
 fn parse_tag(node: &Node) -> DynResult<String> {
-    Ok(text_content(&node)?)
+    Ok(text_content(node)?)
 }
 
 fn parse_tags(parent: &Node) -> DynResult<Vec<String>> {
@@ -610,7 +583,7 @@ fn parse_alarms(
 }
 
 fn parse_state(parent: &Node) -> DynResult<StateConfig> {
-    let id = required_attribute(&parent, "id")?;
+    let id = required_attribute(parent, "id")?;
     let mut actions = Vec::new();
     for child in parent.children() {
         if check_element_ns(&child)? {
@@ -628,7 +601,7 @@ fn parse_state(parent: &Node) -> DynResult<StateConfig> {
 }
 
 fn parse_state_machine(parent: &Node) -> DynResult<StateMachineConfig> {
-    let id = required_attribute(&parent, "id")?;
+    let id = required_attribute(parent, "id")?;
     let mut states = Vec::new();
     for child in parent.children() {
         if check_element_ns(&child)? {
@@ -645,10 +618,10 @@ fn parse_state_machine(parent: &Node) -> DynResult<StateMachineConfig> {
 }
 
 fn parse_playback_device(node: &Node, player: &mut PlayerConfig) -> DynResult<()> {
-    player.rate = required_attribute(&node, "rate")?;
-    player.channels = required_attribute(&node, "channels")?;
-    let format = optional_attribute::<String>(&node, "format")?;
-    match format.as_ref().map(|s| s.as_str()) {
+    player.rate = required_attribute(node, "rate")?;
+    player.channels = required_attribute(node, "channels")?;
+    let format = optional_attribute::<String>(node, "format")?;
+    match format.as_deref() {
         Some("i16") => player.sample_format = SampleFormat::I16,
         Some("u16") => player.sample_format = SampleFormat::U16,
         Some("f32") => player.sample_format = SampleFormat::F32,
@@ -656,15 +629,15 @@ fn parse_playback_device(node: &Node, player: &mut PlayerConfig) -> DynResult<()
         None => {}
     }
 
-    player.playback_device = text_content(&node)?;
+    player.playback_device = text_content(node)?;
 
     Ok(())
 }
 
 fn parse_volume_control(node: &Node, controls: &mut Vec<VolumeConfig>) -> DynResult<()> {
-    let id = required_attribute(&node, "id")?;
-    let device = text_content(&node)?;
-    let initial_volume = optional_attribute::<f32>(&node, "initial")?;
+    let id = required_attribute(node, "id")?;
+    let device = text_content(node)?;
+    let initial_volume = optional_attribute::<f32>(node, "initial")?;
     let control = VolumeConfig {
         id,
         device,
@@ -677,14 +650,14 @@ fn parse_volume_control(node: &Node, controls: &mut Vec<VolumeConfig>) -> DynRes
 fn check_element_ns(node: &Node) -> Result<bool, ConfigError> {
     if node.is_element() {
         if node.tag_name().namespace() != Some(NS) {
-            return Err(ConfigError::new(&node, WrongNamespace));
+            return Err(ConfigError::new(node, WrongNamespace));
         }
         return Ok(true);
     } else if node.is_text() {
         if let Some(text) = node.text() {
             // Don't allow non-whitespace around elements
             if text.find(|c: char| !c.is_whitespace()).is_some() {
-                return Err(ConfigError::new(&node, UnexpectedText));
+                return Err(ConfigError::new(node, UnexpectedText));
             }
         }
     }
@@ -692,7 +665,7 @@ fn check_element_ns(node: &Node) -> Result<bool, ConfigError> {
 }
 
 pub fn read_str(input: &str) -> DynResult<PlayerConfig> {
-    let document = Document::parse(&input)?;
+    let document = Document::parse(input)?;
     let mut player = PlayerConfig {
         bind: "/tmp/siemens/automation/HmiRunTime".to_string(),
         playback_device: "".to_string(),

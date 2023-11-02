@@ -1,5 +1,5 @@
 use crate::util::error::DynResult;
-use log::{error};
+use log::error;
 use std::future::Future;
 use std::io;
 use tokio::io::Interest;

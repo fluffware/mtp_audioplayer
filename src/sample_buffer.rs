@@ -13,6 +13,14 @@ impl SampleBuffer {
             SampleBuffer::F32(buf) => buf.len(),
         }
     }
+
+    pub fn is_empty(&self) -> bool {
+        match self {
+            SampleBuffer::I16(buf) => buf.is_empty(),
+            SampleBuffer::U16(buf) => buf.is_empty(),
+            SampleBuffer::F32(buf) => buf.is_empty(),
+        }
+    }
 }
 
 pub trait AsSampleSlice<S> {

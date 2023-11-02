@@ -127,7 +127,7 @@ async fn main() {
 async fn play_file(sound_file: &str) -> DynResult<()> {
     let mut samples;
     println!("File: {:?}", sound_file);
-    match hound::WavReader::open(&sound_file) {
+    match hound::WavReader::open(sound_file) {
         Ok(mut reader) => {
             samples = Vec::<i16>::new();
             for s in reader.samples::<i16>() {

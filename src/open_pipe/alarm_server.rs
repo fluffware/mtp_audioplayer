@@ -109,11 +109,7 @@ impl AlarmServer {
 
     fn notify_subscribe(&mut self, params: NotifyAlarms, cookie: &str) {
         debug!("notify_subscribe: {}", cookie);
-        let alarms: Vec<AlarmData> = params
-            .alarms
-            .into_iter()
-            .map(|alarm| AlarmData::from(alarm))
-            .collect();
+        let alarms: Vec<AlarmData> = params.alarms.into_iter().map(AlarmData::from).collect();
         for (subscr_cookie, subscr) in &self.subscriptions {
             debug!("subscr: {}", subscr_cookie);
             let subscr = subscr.lock().unwrap();
@@ -166,5 +162,11 @@ impl AlarmServer {
             }
             _ => None,
         }
+    }
+}
+
+impl Default for AlarmServer {
+    fn default() -> AlarmServer {
+        AlarmServer::new()
     }
 }

@@ -9,7 +9,6 @@ use mtp_audioplayer::open_pipe::{
     connection::{self, Connection, MessageVariant},
     tag_server::{ReplyFn, TagServer},
 };
-use serde_json;
 use std::sync::{Arc, Mutex, Weak};
 use tokio::signal;
 use tokio::sync::mpsc::UnboundedSender;
@@ -112,7 +111,7 @@ fn web_handler(
                 | MessageVariant::ErrorWriteTag(_) => {
                     let mut tag_server = tag_server.lock().unwrap();
 
-                    if let Some(msg) = tag_server.handle_message(op_msg, &notify) {
+                    if let Some(msg) = tag_server.handle_message(op_msg, notify) {
                         if let Err(err) = tx.send(msg) {
                             error!("Failed to queue reply: {}", err);
                         }
@@ -128,7 +127,7 @@ fn web_handler(
                 | MessageVariant::NotifyReadAlarm(_)
                 | MessageVariant::ErrorReadAlarm(_) => {
                     let mut alarm_server = alarm_server.lock().unwrap();
-                    if let Some(msg) = alarm_server.handle_message(op_msg, &notify) {
+                    if let Some(msg) = alarm_server.handle_message(op_msg, notify) {
                         if let Err(err) = tx.send(msg) {
                             error!("Failed to queue reply: {}", err);
                         }

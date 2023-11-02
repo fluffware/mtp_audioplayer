@@ -1,4 +1,5 @@
 use clap::{Arg, Command};
+use git_version::git_version;
 use log::{debug, error, warn};
 use mtp_audioplayer::actions::tag_setter::TagSetter;
 use mtp_audioplayer::app_config::{
@@ -17,13 +18,12 @@ use std::sync::Arc;
 use tokio::signal;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::time::{timeout, Duration};
-use git_version::git_version;
 
 const DEFAULT_CONFIG_FILE: &str = "mtp_audioplayer.xml";
 
 async fn subscribe_tags(
     pipe: &mut open_pipe::Connection,
-    tag_names: &mut Vec<String>,
+    tag_names: &mut [String],
 ) -> DynResult<(String, HashMap<String, String>)> {
     let mut tag_values = HashMap::<String, String>::new();
 
@@ -49,7 +49,7 @@ async fn subscribe_tags(
                         break 'next_event;
                     }
                 }
-                Err(e) => return Err(e.into()),
+                Err(e) => return Err(e),
             },
         }
     }
@@ -72,7 +72,7 @@ async fn subscribe_alarms(pipe: &mut open_pipe::Connection) -> DynResult<Vec<Ala
                             .params
                             .alarms
                             .into_iter()
-                            .map(|a| AlarmData::from(a))
+                            .map(AlarmData::from)
                             .collect();
                         break 'next_event;
                     }
@@ -80,7 +80,7 @@ async fn subscribe_alarms(pipe: &mut open_pipe::Connection) -> DynResult<Vec<Ala
                     _ => {}
                 },
                 Err(e) => {
-                    return Err(e.into());
+                    return Err(e);
                 }
             },
         }
@@ -92,16 +92,16 @@ fn trig_on_tag(tag_ctxt: &Arc<TagContext>, tag_name: &str, tag_value: &str) {
     tag_ctxt.tag_changed(tag_name, tag_value);
 }
 
-fn read_configuration(
-    path: &Path,
-) -> DynResult<(
+type ConfigurationResult = DynResult<(
     PlayerConfig,
     Arc<TagContext>,
     Arc<AlarmContext>,
     Arc<VolumeControlContext>,
     StateMachineContext,
     UnboundedReceiver<TagSetRequest>,
-)> {
+)>;
+
+fn read_configuration(path: &Path) -> ConfigurationResult {
     let app_conf = read_config::read_file(path)?;
     let base_dir = Path::new(path)
         .parent()
@@ -135,7 +135,7 @@ type MessageHandler = Box<dyn FnMut(&open_pipe::Message) -> DynResult<bool>>;
 
 #[tokio::main]
 async fn main() {
-    let version = env!("CARGO_PKG_VERSION").to_string()+" "+ git_version!();
+    let version = env!("CARGO_PKG_VERSION").to_string() + " " + git_version!();
     let app_args = Command::new("MTP audio player")
         .version(version.as_str())
         .about("Server for audio playback on Siemens Unified Comfort HMI panels")
@@ -245,34 +245,31 @@ async fn main() {
                 done = true;
             },
             res = pipe_send_rx.recv() => {
-                match res {
-                    Some(req) => {
-                        let write_tag = WriteTagValue {
-                            name: req.tag_name.clone(),
+                if let  Some(req) = res {
+                    let write_tag = WriteTagValue {
+                        name: req.tag_name.clone(),
                             value: req.value
-                        };
-                        if let Err(e) = pipe.write_tags(&[write_tag]).await {
-                            error!("Failed to write tag to pipe: {}",e);
-                        }
-                        let mut done = Some(req.done);
-                        let name = req.tag_name;
-            // Queue a handler that waits for the write to be confirmed
-                        handler_list.push(Box::new(move |msg: &open_pipe::Message| {
-                            if let MessageVariant::NotifyWriteTag(notify) = &msg.message {
-                for tag in &notify.params.tags {
-                    if tag.name == name {
-                    let _ = done.take().unwrap().send(Ok(()));
-                    return Ok(false)
+                    };
+                    if let Err(e) = pipe.write_tags(&[write_tag]).await {
+                        error!("Failed to write tag to pipe: {}",e);
                     }
-                }
-                Ok(true)
-                            } else {
-                                Ok(!done.as_ref().unwrap().is_closed())
+                    let mut done = Some(req.done);
+                    let name = req.tag_name;
+                    // Queue a handler that waits for the write to be confirmed
+                    handler_list.push(Box::new(move |msg: &open_pipe::Message| {
+                        if let MessageVariant::NotifyWriteTag(notify) = &msg.message {
+                            for tag in &notify.params.tags {
+                                if tag.name == name {
+                                    let _ = done.take().unwrap().send(Ok(()));
+                                        return Ok(false)
+                                }
                             }
+                            Ok(true)
+                            } else {
+                            Ok(!done.as_ref().unwrap().is_closed())
                         }
-                        ));
-                    }
-                    None => {}
+                        }
+                    ));
                 }
             },
             res = pipe.get_message() => {

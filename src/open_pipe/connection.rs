@@ -14,7 +14,7 @@ pub struct Connection {
     cookie_count: u32,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
 #[serde(rename_all = "PascalCase")]
 pub struct ErrorInfo {
     pub error_code: u32,
@@ -26,15 +26,6 @@ impl std::error::Error for ErrorInfo {}
 impl std::fmt::Display for ErrorInfo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{} (0x{:08x})", self.error_description, self.error_code)
-    }
-}
-
-impl Default for ErrorInfo {
-    fn default() -> ErrorInfo {
-        ErrorInfo {
-            error_code: 0,
-            error_description: String::new(),
-        }
     }
 }
 
