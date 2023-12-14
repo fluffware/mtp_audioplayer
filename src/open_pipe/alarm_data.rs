@@ -22,7 +22,7 @@ impl From<NotifyAlarm> for AlarmData {
             &notify.modification_time,
             "%Y-%m-%d %H:%M:%S%.f",
         ) {
-            Ok(t) => DateTime::from_utc(t, Utc),
+            Ok(t) => DateTime::from_naive_utc_and_offset(t, Utc),
             Err(_) => Utc::now(),
         };
         AlarmData {

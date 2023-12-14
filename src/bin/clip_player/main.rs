@@ -35,7 +35,11 @@ fn adjust_volume(volume: f64, buffer: &mut [i16])
 
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt::init();
+    let _logger = flexi_logger::Logger::try_with_env_or_str("info")
+        .unwrap()
+        .start()
+        .unwrap();
+
     let app_args = Command::new("Clip player")
         .version("0.1")
         .about("Test tools for clip playback")

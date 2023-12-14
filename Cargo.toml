@@ -12,8 +12,6 @@ path = "src/bin/openpipe_tool/main.rs"
 hound = "3.1.0"
 serde_json = "1.0"
 serde= {version="*", features=["derive"]}
-tracing="0.1"
-tracing-subscriber="0.2"
 tokio= {version="1", features=["rt-multi-thread", "net", "macros", "signal", "io-util", "sync", "time"]}
 tokio-util="*"
 log = "0.4"
@@ -33,6 +31,7 @@ git-version="0.3"
 simple_samplerate={git="https://github.com/fluffware/simple_samplerate.git"}
 systemd = {version = "0.10", optional=true}
 alsa = {version="0.6", optional=true}
+flexi_logger = {version="0.27"}
 
 [dev-dependencies]
 test-log = "0.2"

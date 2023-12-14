@@ -330,7 +330,10 @@ const DEFAULT_PIPE_NAME: &str = r"\\.\pipe\HmiRuntime";
 
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt::init();
+    let _logger = flexi_logger::Logger::try_with_env_or_str("info")
+        .unwrap()
+        .start()
+        .unwrap();
     let app_args = Command::new("Open Pipe tool")
         .version("0.1")
         .about("Test tool for Open Pipe protocol")

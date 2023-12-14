@@ -387,7 +387,10 @@ fn action_conf_to_action(
             value.clone(),
             build_data.tag_ctxt.clone(),
         ))),
-        ActionType::IgnoreAlarms { filter, permanent } => Ok(Arc::new(AlarmFunctionAction::new(
+        ActionType::IgnoreAlarms {
+            filter,
+            permanent: _,
+        } => Ok(Arc::new(AlarmFunctionAction::new(
             filter.clone(),
             build_data.alarm_ctxt.clone(),
             AlarmOp::Ignore,

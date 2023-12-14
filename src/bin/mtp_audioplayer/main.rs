@@ -150,7 +150,7 @@ async fn main() {
 
     let conf_path_str = OsStr::new(args.value_of("CONF").unwrap());
 
-    daemon::start(&args);
+    let logger = daemon::start(&args);
 
     let (app_conf, tag_ctxt, alarm_ctxt, _volume_ctxt, state_machine_ctxt, mut pipe_send_rx) =
         match read_configuration(Path::new(&conf_path_str)) {
@@ -313,5 +313,5 @@ async fn main() {
         }
     }
 
-    daemon::exiting();
+    daemon::exiting(logger);
 }

@@ -22,6 +22,7 @@ pub mod daemon {
     #[cfg(feature = "systemd")]
     pub use crate::systemd::{add_args, exiting, ready, start};
 }
+mod flexi_setup;
 
 #[cfg(feature = "alsa")]
 mod alsa;
