@@ -36,6 +36,6 @@ where
     fn run(&self) -> ActionFuture {
         self.tag_setter
             .as_ref()
-            .set_tag(&self.tag_name, &self.value)
+            .async_set_tag(&self.tag_name, &self.value)
     }
 }

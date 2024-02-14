@@ -233,7 +233,13 @@ async fn main() {
         }
         Ok(true)
     }));
-    tag_ctxt.set_tag("AUDIO_SERVER_VERSION", version.as_str());
+    if let Err(e) = tag_ctxt
+        .async_set_tag("AUDIO_SERVER_VERSION", version.as_str())
+        .await
+    {
+        error!("Failed to set AUDIO_SERVER_VERSION: {}", e);
+    }
+
     daemon::ready();
     let mut done = false;
     while !done {

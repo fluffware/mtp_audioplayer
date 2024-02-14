@@ -476,7 +476,7 @@ impl TagContext {
 }
 
 impl TagSetter for TagContext {
-    fn set_tag(&self, tag_name: &str, value: &str) -> TagSetFuture {
+    fn async_set_tag(&self, tag_name: &str, value: &str) -> TagSetFuture {
         self.tag_changed(tag_name, value);
         let (done_send, done_recv) = oneshot::channel();
         let req = TagSetRequest {
@@ -488,6 +488,20 @@ impl TagSetter for TagContext {
             return Box::pin(std::future::ready(Err("Failed to queue request".into())));
         }
         Box::pin(async move { timeout(Duration::from_millis(500), done_recv).await?? })
+    }
+
+    fn set_tag(&self, tag_name: &str, value: &str) -> DynResult<()> {
+        self.tag_changed(tag_name, value);
+        let (done_send, _done_recv) = oneshot::channel();
+        let req = TagSetRequest {
+            tag_name: tag_name.to_string(),
+            value: value.to_string(),
+            done: done_send,
+        };
+        if self.tag_send_tx.send(req).is_err() {
+            return Err("Failed to queue request".into());
+        }
+        Ok(())
     }
 }
 
@@ -573,12 +587,12 @@ impl AlarmFilterState {
     fn update_tags(&self, matching: usize, ignored: usize) {
         if let Some(tag_setter) = Weak::upgrade(&self.tag_setter) {
             if let Some(tag_matching) = &self.tag_matching {
-                tag_setter
+                let _ = tag_setter
                     .as_ref()
                     .set_tag(tag_matching, &matching.to_string());
             }
             if let Some(tag_ignored) = &self.tag_ignored {
-                tag_setter.set_tag(tag_ignored, &ignored.to_string());
+                let _ = tag_setter.set_tag(tag_ignored, &ignored.to_string());
             }
         }
     }
