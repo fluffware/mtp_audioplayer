@@ -280,8 +280,9 @@ async fn main() {
             },
             res = pipe.get_message() => {
                 match res {
-                    Err(_) => {
-                        done = true
+                    Err(e) => {
+                        error!("Failed to get messge from Open Pipe: {e}");
+                        done = true;
                     },
                     Ok(msg) => {
                         let mut i = 0;
@@ -296,7 +297,7 @@ async fn main() {
                                 },
                                 Err(e) => {
                                     error!("Failed to handle Open Pipe message: {}",e);
-                                    return;
+                                    done = true
                                 }
                             }
                         }
@@ -312,7 +313,7 @@ async fn main() {
                     }
                     Err(err) => {
                         error!("State machine error: {}", err);
-                        return;
+                        done = true;
                     }
                 }
             }
