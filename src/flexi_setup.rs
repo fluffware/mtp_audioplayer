@@ -40,6 +40,7 @@ pub fn setup_flexi_loggger(args: &ArgMatches) -> Result<LoggerHandle, Box<dyn Er
     let count = args.try_get_one::<usize>("log_file_count")?.unwrap();
     let cleanup = Cleanup::KeepLogFiles(*count);
     logger = logger.rotate(criterion, Naming::Timestamps, cleanup);
+    logger = logger.append();
 
     Ok(logger.start()?)
 }
