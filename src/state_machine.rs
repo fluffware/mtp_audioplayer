@@ -1,6 +1,6 @@
 use crate::actions::action::Action;
-use crate::util::error::DynResult;
 use crate::event_limit::EventLimit;
+use crate::util::error::DynResult;
 use std::sync::{Arc, Mutex};
 use tokio::sync::Notify;
 
@@ -89,7 +89,8 @@ impl StateMachine {
                         return Err(format!(
                             "State changed too fast for state machine {}",
                             self.name
-                        ).into());
+                        )
+                        .into());
                     }
                     if let Some(active_state) = current.active_state {
                         if let Some(action) = &current.states[active_state].action {

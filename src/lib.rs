@@ -3,13 +3,13 @@ pub mod alarm_filter;
 pub mod app_config;
 pub mod clip_player;
 pub mod clip_queue;
+pub mod event_limit;
 pub mod open_pipe;
 pub mod priority_scheduler;
 pub mod read_config;
 pub mod sample_buffer;
 pub mod state_machine;
 pub mod util;
-pub mod event_limit;
 
 #[cfg(feature = "systemd")]
 mod systemd;

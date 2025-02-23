@@ -456,15 +456,15 @@ impl TagContext {
     pub fn tag_changed(&self, name: &str, new_value: &str) {
         if let Ok(mut tags) = self.tags.lock() {
             if let Some(data) = tags.get_mut(name) {
-		let new_value = new_value.to_string();
-		if data.state.as_ref().map_or(false,|d| d !=  &new_value) {
+                let new_value = new_value.to_string();
+                if data.state.as_ref().map_or(false, |d| d != &new_value) {
                     debug!(
-			"{}: {} -> {}",
-                    name,
-			data.state.as_ref().map_or("-", |s| s.as_str()),
-			new_value
+                        "{}: {} -> {}",
+                        name,
+                        data.state.as_ref().map_or("-", |s| s.as_str()),
+                        new_value
                     );
-		}
+                }
                 data.state = Some(new_value.clone());
                 if let Err(err) = data.observers.0.send(new_value) {
                     error!("Failed to notify tag observers: {}", err);
