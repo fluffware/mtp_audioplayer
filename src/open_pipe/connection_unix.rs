@@ -33,7 +33,9 @@ where
                     break;
                 }
                 //debug!("Got line: {}", line);
-                send.send(line.as_bytes().to_vec()).await.unwrap();
+                if let Err(e) = send.send(line.as_bytes().to_vec()).await {
+		    error!("Failed to send data from pipe to user: {e}");
+		}
             }
         }
     }

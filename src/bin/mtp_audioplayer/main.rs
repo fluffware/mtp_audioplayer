@@ -6,6 +6,7 @@ use mtp_audioplayer::app_config::{
     self, AlarmContext, StateMachineContext, TagContext, TagSetRequest, VolumeControlContext,
 };
 use mtp_audioplayer::daemon;
+use mtp_audioplayer::event_limit::EventLimit;
 use mtp_audioplayer::open_pipe::alarm_data::AlarmData;
 use mtp_audioplayer::open_pipe::connection as open_pipe;
 use mtp_audioplayer::read_config::{self, PlayerConfig};
@@ -114,12 +115,14 @@ fn read_configuration(path: &Path) -> ConfigurationResult {
     let tag_ctxt = Arc::new(tag_ctxt);
     let alarm_ctxt = app_config::setup_alarms(&app_conf, Arc::downgrade(&tag_ctxt))?;
     let alarm_ctxt = Arc::new(alarm_ctxt);
+    let change_limit = EventLimit::new(Duration::from_secs(1), 10);
     let state_machine_ctxt = app_config::setup_state_machines(
         &app_conf,
         &playback_ctxt,
         &tag_ctxt,
         &volume_ctxt,
         &alarm_ctxt,
+        change_limit,
     )?;
     Ok((
         app_conf,

@@ -9,6 +9,7 @@ pub mod read_config;
 pub mod sample_buffer;
 pub mod state_machine;
 pub mod util;
+pub mod event_limit;
 
 #[cfg(feature = "systemd")]
 mod systemd;

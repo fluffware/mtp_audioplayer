@@ -1,5 +1,6 @@
 use crate::actions::action::Action;
 use crate::util::error::DynResult;
+use crate::event_limit::EventLimit;
 use std::sync::{Arc, Mutex};
 use tokio::sync::Notify;
 
@@ -11,7 +12,8 @@ struct State {
 struct StateMachineMut {
     states: Vec<State>,
     active_state: Option<usize>,
-    restart: bool, // Restart the state if it's already running
+    restart: bool,            // Restart the state if it's already running
+    change_limit: EventLimit, // Limit how fast the state may change
 }
 
 pub struct StateMachine {
@@ -21,7 +23,7 @@ pub struct StateMachine {
 }
 
 impl StateMachine {
-    pub fn new(name: &str) -> Arc<StateMachine> {
+    pub fn new(name: &str, change_limit: EventLimit) -> Arc<StateMachine> {
         Arc::new(StateMachine {
             name: name.to_string(),
             current_changed: Notify::new(),
@@ -29,6 +31,7 @@ impl StateMachine {
                 states: Vec::new(),
                 active_state: None,
                 restart: false,
+                change_limit,
             }),
         })
     }
@@ -82,6 +85,12 @@ impl StateMachine {
                     .lock()
                     .map_err(|_| "Failed to lock state-machine")?;
                 if running_state != current.active_state || current.restart {
+                    if !current.change_limit.count() {
+                        return Err(format!(
+                            "State changed too fast for state machine {}",
+                            self.name
+                        ).into());
+                    }
                     if let Some(active_state) = current.active_state {
                         if let Some(action) = &current.states[active_state].action {
                             running_action = Some(action.run());

@@ -20,6 +20,7 @@ use crate::actions::{
 };
 use crate::alarm_filter::BoolOp as AlarmBoolOp;
 use crate::clip_queue::ClipQueue;
+use crate::event_limit::EventLimit;
 use crate::open_pipe::alarm_data::AlarmData;
 use crate::open_pipe::alarm_data::AlarmId;
 use crate::read_config::ActionType;
@@ -32,6 +33,7 @@ use crate::{
     clip_player::ClipPlayer,
     read_config::{ClipType, PlayerConfig},
 };
+
 use cpal::SampleFormat;
 use log::{debug, error};
 use simple_samplerate::{sample::Sample, samplerate::Samplerate};
@@ -292,6 +294,7 @@ struct ActionBuildData<'a> {
     alarm_ctxt: &'a Arc<AlarmContext>,
     state_machine_map: &'a HashMap<String, Arc<StateMachine>>,
     current_state_machine: &'a Arc<StateMachine>,
+    repeat_limit: EventLimit,
 }
 
 fn action_conf_to_action(
@@ -336,7 +339,7 @@ fn action_conf_to_action(
         ActionType::Wait(timeout) => Ok(Arc::new(WaitAction::new(*timeout))),
         ActionType::Repeat { count, action } => {
             let repeated = action_conf_to_action(build_data, action)?;
-            Ok(Arc::new(RepeatAction::new(repeated, *count)))
+            Ok(Arc::new(RepeatAction::new(repeated, *count, build_data.repeat_limit.clone())))
         }
         ActionType::Goto(state_name) => {
             let state_machine;
@@ -751,11 +754,12 @@ pub fn setup_state_machines(
     tag_ctxt: &Arc<TagContext>,
     volume_control: &Arc<VolumeControlContext>,
     alarm_ctxt: &Arc<AlarmContext>,
+    change_limit: EventLimit,
 ) -> DynResult<StateMachineContext> {
     let mut state_machines = Vec::new();
     let mut state_machine_map = HashMap::new();
     for state_machine_conf in &player_conf.state_machines {
-        let state_machine = StateMachine::new(&state_machine_conf.id);
+        let state_machine = StateMachine::new(&state_machine_conf.id, change_limit.clone());
         for state_conf in &state_machine_conf.states {
             state_machine.add_state(&state_conf.id);
             debug!("Added: {}:{}", state_machine_conf.id, state_conf.id);
@@ -775,6 +779,7 @@ pub fn setup_state_machines(
                 alarm_ctxt,
                 state_machine_map: &state_machine_map,
                 current_state_machine: state_machine,
+		repeat_limit: change_limit.clone(),
             };
             let action = action_conf_to_action(&build_data, action_conf)?;
             state_machine.set_action(state_index, action);
