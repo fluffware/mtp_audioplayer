@@ -339,7 +339,11 @@ fn action_conf_to_action(
         ActionType::Wait(timeout) => Ok(Arc::new(WaitAction::new(*timeout))),
         ActionType::Repeat { count, action } => {
             let repeated = action_conf_to_action(build_data, action)?;
-            Ok(Arc::new(RepeatAction::new(repeated, *count, build_data.repeat_limit.clone())))
+            Ok(Arc::new(RepeatAction::new(
+                repeated,
+                *count,
+                build_data.repeat_limit.clone(),
+            )))
         }
         ActionType::Goto(state_name) => {
             let state_machine;
@@ -450,11 +454,19 @@ impl TagContext {
     }
 
     pub fn tag_changed(&self, name: &str, new_value: &str) {
-        debug!("{}: -> {}", name, new_value);
         if let Ok(mut tags) = self.tags.lock() {
             if let Some(data) = tags.get_mut(name) {
-                data.state = Some(new_value.to_string());
-                if let Err(err) = data.observers.0.send(new_value.to_string()) {
+		let new_value = new_value.to_string();
+		if data.state.as_ref().map_or(false,|d| d !=  &new_value) {
+                    debug!(
+			"{}: {} -> {}",
+                    name,
+			data.state.as_ref().map_or("-", |s| s.as_str()),
+			new_value
+                    );
+		}
+                data.state = Some(new_value.clone());
+                if let Err(err) = data.observers.0.send(new_value) {
                     error!("Failed to notify tag observers: {}", err);
                 }
             }
@@ -779,7 +791,7 @@ pub fn setup_state_machines(
                 alarm_ctxt,
                 state_machine_map: &state_machine_map,
                 current_state_machine: state_machine,
-		repeat_limit: change_limit.clone(),
+                repeat_limit: change_limit.clone(),
             };
             let action = action_conf_to_action(&build_data, action_conf)?;
             state_machine.set_action(state_index, action);
